@@ -1,0 +1,3 @@
+go build ./go_file.go
+go clean
+go run ./go_file.go
