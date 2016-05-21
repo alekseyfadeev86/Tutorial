@@ -23,9 +23,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = '1#=mbp&&(w^4l7ck(v+@wa%qhjit!h1w(8a!0e9con2dlj93ux'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [ '*' ]
 
 
 # Application definition
@@ -82,11 +82,22 @@ DATABASES = {
     }
 }
 
+# Для postgresql (???)
+# DATABASES = {
+# 'default': {
+# 'ENGINE': 'django.db.backends.postgresql_psycopg2',
+# 'NAME': 'mydatabase',
+# 'USER': 'mydatabaseuser',
+# 'PASSWORD': 'mypassword',
+# 'HOST': '127.0.0.1',
+# 'PORT': '5432',
+# }
+# }
 
 # Internationalization
 # https://docs.djangoproject.com/en/1.8/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'ru' #'en-us'
 
 TIME_ZONE = 'UTC'
 
