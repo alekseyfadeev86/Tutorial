@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Форма</title>
+</head>
+<body>
+    <header>
+        <!--Заголовок-->
+        <p>
+            <a><img src="logo.png" alt="Логотип" width="50" height="50"></a>
+            <em>Заполните данные</em>
+        </p>
+
+        <ul>
+            <li><a href="index.html">Перейти на главную страницу</a></li>
+            <li><a href="https://yandex.ru/">Свалить отсюда на яндекс</a></li>
+        </ul>
+    </header>
+    <main>
+        <form action="/form.html" method="POST">
+            <p>
+                <label>Обращение</label>
+                <label><input type="radio" name="title" value="mr">Г-н</label>
+                <label><input type="radio" name="title" value="mrs">Г-жа</label>
+            </p>
+            <p>
+                <label for="first_name">Имя</label>
+                <input type="text" name="first_name" id="first_name">
+            </p>
+            <p>
+                <label>Фамилия</label>
+                <input type="text" name="last_name">
+            </p>
+            <p>
+                <label>Email</label>
+                <input type="email" name="email">
+            </p>
+            <p>
+                <label>
+                    <input type="checkbox" name="terms">Я согласен с условиями использования
+                </label>
+            </p>
+            <p>
+                <button>Зарегистрироваться</button>
+            </p>
+        </form>
+    </main>
+
+    <!-- Обратить внимание на article, main, формы (www.webref.ru в помощь) -->
+    <!--
+    <footer>
+        <p><h3>Если захотите свалить - вот ссылки</h3></p>
+        <ul>
+            <li><a href="simple_html.html">Перейти на страницу 1</a></li>
+            <li><a href="simple_html2.html">Перейти на страницу 2</a></li>
+        </ul>
+    </footer>
+    -->
+</body>
+</html>

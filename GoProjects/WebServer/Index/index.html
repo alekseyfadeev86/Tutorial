@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Здравствуйте</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <!--<link rel="shortcut icon" href="favicon.ico" type="image/x-icon">-->
+</head>
+<body onload="alert('Привет');">
+    <p><h1>Ура! Работает!</h1></p>
+    <p>Пробная страница</p>
+    <p><a><img src="logo.png" alt="Логотип" width="50" height="50"></a> картинка</p>
+    
+    <div id="demo">Изменяемый текст</div>
+    <button type="button" onclick="loadDoc()">Изменить текст</button>
+    <script>
+    function loadDoc()
+    {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function()
+        {
+            if (xhttp.readyState == 4 && xhttp.status == 200)
+            {
+                document.getElementById("demo").innerHTML = xhttp.responseText;
+            }
+        };
+        xhttp.open("GET", "AjaxData/param1.txt", true);
+        xhttp.send();
+    }
+    </script>
+
+    <!--<p><a href="websocket_test.html">Страница сайта</a></p>-->
+    <p><input type="button" value="Показать хост" onclick="alert( window.location.host );"/></p>
+    <p><a href="form.html">Перейти на страницу с формой</a></p>
+    <p><a href="ws_test.html">Перейти на страницу с веб-сокетом</a></p>
+</body>
+</html>

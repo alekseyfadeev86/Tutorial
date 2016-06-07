@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Проверка веб-сокета</title>
+    <script type="text/javascript">
+        //function onLoad()
+        //{
+            //alert( 'Привет' );
+            var socket = new WebSocket("ws://" + window.location.host);
+            //var socket = new WebSocket("ws://echo.websocket.org");
+            socket.onopen = function()
+            {
+              alert("Соединение установлено.");
+            };
+
+            socket.onclose = function( event )
+            {
+                if( event.wasClean )
+                {
+                    alert( 'Соединение закрыто чисто' );
+                }
+                else
+                {
+                    alert( 'Обрыв соединения' ); // например, "убит" процесс сервера
+                }
+                alert( 'Код: ' + event.code + ' причина: ' + event.reason );
+            };
+
+            socket.onmessage = function( event )
+            {
+                alert( "Получены данные " + event.data );
+            };
+
+            socket.onerror = function( error )
+            {
+                alert( "Ошибка " + error.message );
+            };
+
+            //socket.send( 'hello' )
+        //}
+    </script>
+</head>
+<body>
+<!--<body onload="onLoad()">-->
+    <h1>Ура! Работает!</h1>
+    <p><a href="index.html">Перейти на главную страницу</a></p>
+    <p><input type="button" value="Отправить hello" onclick="window.socket.send( 'hello' );"/></p>
+    <p><input type="button" value="Закрыть" onclick="window.socket.close();"/></p>
+</body>
+</html>
