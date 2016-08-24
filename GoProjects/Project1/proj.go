@@ -1,19 +1,21 @@
 package main
 
 import (
-    "fmt"
-    "os"
-    "say_hello"
+	"fmt"
+	"os"
+	"say_hi"
 )
 
 func main() {
-    s := "Привет Hello"
-    
-    if len( os.Args ) > 1 {
-	switch os.Args[ 1 ] {
-	case "en", "En": s = say_hello.SayEn()
-	case "ru", "Ru": s = say_hello.SayRu()
+	s := "Привет Hello"
+
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "en", "En":
+			s = say_hi.SayEn()
+		case "ru", "Ru":
+			s = say_hi.SayRu()
+		}
 	}
-    }
-    fmt.Println( s )
+	fmt.Println(s)
 }

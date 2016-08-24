@@ -1,5 +1,11 @@
 package main
 
+import (
+	"CommonTcpServer"
+	"HttpUtils"
+	"WebsocketUtils"
+)
+
 // Интерфейс абстрактного работника с возможностью формироваиня нового
 type WorkerReplacer interface {
 	// Метод обработки данных
@@ -11,12 +17,12 @@ type WorkerReplacer interface {
 }
 
 // Тип обработчик http: принимает запрос, возвращает ответ на запрос, новый обработчик и признак, надо ли продолжать общение
-type HttpHandler func(req *HttpRequest) (*HttpResponse, WorkerReplacer, bool)
+type HttpHandler func(req *HttpUtils.HttpRequest) (*HttpUtils.HttpResponse, WorkerReplacer, bool)
 
 // Структура "работника", работающего по протоколу HTTP/1.1
 type HttpWorker struct {
 	// Читатель запросов http
-	reader RequestsReader
+	reader HttpUtils.RequestsReader
 
 	requests_worker HttpHandler
 }
@@ -53,7 +59,7 @@ func (w *HttpWorker) OnError(err error) bool {
 // Обработчики протокола веб-сокетов
 type WebsockHandlers struct {
 	// Обработчик входящих данных
-	InputHandler func(i *Frame)
+	InputHandler func(i *WebsocketUtils.Frame)
 
 	// Отправитель (должен быть запущет в отдельной продпрограмме)
 	Writer func(sender func([]byte))
@@ -92,12 +98,12 @@ func (w *WebWorker) OnError(err error) bool {
 }
 
 // Функция-создатель "фабрик" обработчиков
-func WebWorkersFactoryMaker(h_http HttpHandler) DataWorkersMaker {
+func WebWorkersFactoryMaker(h_http HttpHandler) CommonTcpServer.DataWorkersMaker {
 	if h_http == nil {
 		panic("Http handler cannot be nil!")
 	}
 
-	res := func(sender func([]byte)) DataWorker {
+	res := func(sender func([]byte)) CommonTcpServer.DataWorker {
 		return &WebWorker{current_worker: &HttpWorker{requests_worker: h_http}, data_sender: sender}
 	}
 

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"CommonTcpServer"
+	"HttpUtils"
+	"WebsocketUtils"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +15,7 @@ import (
 )
 
 type EchoWsWorker struct {
-	reader FrameReader
+	reader WebsocketUtils.FrameReader
 }
 
 func (w *EchoWsWorker) WorkData(buf []byte, sender func([]byte)) (bool, WorkerReplacer) {
@@ -23,14 +26,14 @@ func (w *EchoWsWorker) WorkData(buf []byte, sender func([]byte)) (bool, WorkerRe
 	w.reader.OnRead(buf)
 
 	for f := w.reader.ParseOne(); f != nil; f = w.reader.ParseOne() {
-		if f.Type == opcode_close {
+		if f.Type == WebsocketUtils.OpcodeClose {
 			// Удалённая сторона хочет закрыть соединение - подтверждаем
-			resp_f := Frame{Fin: true, Type: opcode_close, Data: f.Data}
+			resp_f := WebsocketUtils.Frame{Fin: true, Type: WebsocketUtils.OpcodeClose, Data: f.Data}
 			sender(resp_f.Serialize())
 			return false, nil
 		}
 
-		resp_f := Frame{Fin: true, Type: opcode_text, Data: f.Data}
+		resp_f := WebsocketUtils.Frame{Fin: true, Type: WebsocketUtils.OpcodeText, Data: f.Data}
 		sender(resp_f.Serialize())
 	}
 
@@ -41,13 +44,13 @@ func (w *EchoWsWorker) OnError(err error) bool {
 	return err == nil
 }
 
-func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, WorkerReplacer, bool) {
-	return func(req *HttpRequest) (*HttpResponse, WorkerReplacer, bool) {
+func make_handler(root_dir string) func(req *HttpUtils.HttpRequest) (*HttpUtils.HttpResponse, WorkerReplacer, bool) {
+	return func(req *HttpUtils.HttpRequest) (*HttpUtils.HttpResponse, WorkerReplacer, bool) {
 		if req == nil {
 			return nil, nil, false
 		}
 
-		var resp *HttpResponse
+		var resp *HttpUtils.HttpResponse
 		hparams_map := make(map[string]string)
 		for _, p := range req.HeaderParams {
 			hparams_map[p.Name] = p.Value
@@ -74,21 +77,21 @@ func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, Worker
 				key, check := hparams_map["Sec-WebSocket-Key"]
 				if check {
 					// Переходим на протокол веб-сокетов
-					confirm_key := GetAcceptKey(key)
-					resp_hparams := make([]Param, 3)
-					resp_hparams[0] = Param{Name: "Upgrade", Value: "websocket"}
-					resp_hparams[1] = Param{Name: "Connection", Value: "Upgrade"}
-					resp_hparams[2] = Param{Name: "Sec-WebSocket-Accept", Value: confirm_key}
+					confirm_key := WebsocketUtils.GetAcceptKey(key)
+					resp_hparams := make([]HttpUtils.HeaderParam, 3)
+					resp_hparams[0] = HttpUtils.HeaderParam{Name: "Upgrade", Value: "websocket"}
+					resp_hparams[1] = HttpUtils.HeaderParam{Name: "Connection", Value: "Upgrade"}
+					resp_hparams[2] = HttpUtils.HeaderParam{Name: "Sec-WebSocket-Accept", Value: confirm_key}
 
-					resp = MakeHttpResponse(101, "Switching protocols", resp_hparams, nil)
+					resp = HttpUtils.MakeResponse(101, "Switching protocols", resp_hparams, nil)
 					return resp, &EchoWsWorker{}, true
 				}
 			}
 		}
 
 		if req.Host == "/" {
-			h_params := []Param{Param{Name: "Location", Value: "/index.html"}}
-			resp = MakeHttpResponse(301, "Moved permanently", h_params, nil)
+			h_params := []HttpUtils.HeaderParam{HttpUtils.HeaderParam{Name: "Location", Value: "/index.html"}}
+			resp = HttpUtils.MakeResponse(301, "Moved permanently", h_params, nil)
 			return resp, nil, true
 		}
 
@@ -106,7 +109,7 @@ func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, Worker
 
 		f, e := os.Open(root_dir + req.Host)
 		if e != nil {
-			resp = MakeHttpResponse(404, "Нету!", nil, nil)
+			resp = HttpUtils.MakeResponse(404, "Нету!", nil, nil)
 			return resp, nil, true
 		} else {
 			defer f.Close()
@@ -144,10 +147,10 @@ func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, Worker
 </body>
 </html>`
 			body := []byte(resp_body)
-			header_params := make([]Param, 2)
-			header_params[0] = Param{Name: body_size_param_name, Value: strconv.Itoa(len(body))}
-			header_params[1] = Param{Name: "Content-Type", Value: "text/html"}
-			resp = MakeHttpResponse(200, "OK", header_params, body)
+			header_params := make([]HttpUtils.HeaderParam, 2)
+			header_params[0] = HttpUtils.HeaderParam{Name: HttpUtils.BodySizeParamName, Value: strconv.Itoa(len(body))}
+			header_params[1] = HttpUtils.HeaderParam{Name: "Content-Type", Value: "text/html"}
+			resp = HttpUtils.MakeResponse(200, "OK", header_params, body)
 
 		case "GET":
 			body := make([]byte, 0, 100)
@@ -160,22 +163,22 @@ func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, Worker
 				} else if (e == nil) || (e == io.EOF) {
 					body = append(body, buf[:sz]...)
 				} else {
-					resp = MakeHttpResponse(500, e.Error(), nil, nil)
+					resp = HttpUtils.MakeResponse(500, e.Error(), nil, nil)
 				}
 			}
 
 			if (e != nil) && (e != io.EOF) {
 				panic("Ошибка, которой быть не должно: " + e.Error())
 			}
-			header_params := make([]Param, 1, 2)
-			header_params[0] = Param{Name: body_size_param_name, Value: strconv.Itoa(len(body))}
+			header_params := make([]HttpUtils.HeaderParam, 1, 2)
+			header_params[0] = HttpUtils.HeaderParam{Name: HttpUtils.BodySizeParamName, Value: strconv.Itoa(len(body))}
 			if ftype != "" {
-				header_params = append(header_params, Param{Name: "Content-Type", Value: ftype})
+				header_params = append(header_params, HttpUtils.HeaderParam{Name: "Content-Type", Value: ftype})
 			}
 
-			resp = MakeHttpResponse(200, "OK", header_params, body)
+			resp = HttpUtils.MakeResponse(200, "OK", header_params, body)
 		default:
-			resp = MakeHttpResponse(501, "Not supported", nil, nil)
+			resp = HttpUtils.MakeResponse(501, "Not supported", nil, nil)
 		}
 
 		return resp, nil, true
@@ -185,7 +188,7 @@ func make_handler(root_dir string) func(req *HttpRequest) (*HttpResponse, Worker
 func main() {
 	var host string = "127.0.0.1"
 	var port uint16 = 45000
-	var printer func(s string)
+	var printer func(msg interface{})
 
 	ln := len(os.Args)
 	if ln < 2 {
@@ -200,7 +203,7 @@ func main() {
 			}
 
 			if (ln > 4) && (os.Args[4] != "") {
-				printer = func(s string) { fmt.Println(s) }
+				printer = func(msg interface{}) { fmt.Println(msg) }
 			}
 		}
 	}
@@ -216,15 +219,19 @@ func main() {
 	handler := make_handler(path.Clean(os.Args[1]))
 	dw_maker := WebWorkersFactoryMaker(handler)
 
-	stopper := make(chan interface{}, 1)
 	catcher := make(chan os.Signal, 1)
 	signal.Notify(catcher, syscall.SIGINT)
 
-	go func() {
-		defer close(stopper)
-		sig := <-catcher
-		fmt.Println("Поймали ", sig, " останавливаем программу")
-		stopper <- sig
-	}()
-	tcp_server(host, port, dw_maker, printer, stopper)
+	srv, err := CommonTcpServer.RunNewServer(host, port, dw_maker, printer)
+	if err != nil {
+		fmt.Println("Ошибка запуска сервера: " + err.Error())
+		return
+	}
+
+	fmt.Println("Сервер запущен на адресе " + host + ":" + strconv.Itoa(int(port)))
+
+	sig := <-catcher
+	fmt.Println("Поймали ", sig, " останавливаем программу")
+	srv.Stop()
+	fmt.Println("Сервер остановлен. До свидания")
 }

@@ -1,9 +1,4 @@
-package main
-
-/*
-Тут будут утилиты http, например, формирование/разбор пакетов HTTP и веб-сокетов.
-Пока велосипедостроение, затем - использование всей мощи go
-*/
+package HttpUtils
 
 import (
 	"strconv"
@@ -22,31 +17,32 @@ const (
 	param_splitter = ": "
 
 	// Имя параметра запроса/ответа, содержащего длину тела
-	body_size_param_name = "Content-Length"
+	BodySizeParamName = "Content-Length"
 )
 
 // Тип параметра заголовка запроса/ответа
-type Param struct {
+type HeaderParam struct {
+	// Имя и значение параметра
 	Name, Value string
 }
 
-func (p Param) Serialize() string {
+func (p HeaderParam) Serialize() string {
 	return strings.Join([]string{p.Name, p.Value}, param_splitter)
 }
 
-func param_parser(data string) Param {
+func param_parser(data string) HeaderParam {
 	parts := strings.Split(data, param_splitter)
 	if len(parts) > 1 {
-		return Param{Name: parts[0], Value: parts[1]}
+		return HeaderParam{Name: parts[0], Value: parts[1]}
 	} else {
-		return Param{Name: parts[0]}
+		return HeaderParam{Name: parts[0]}
 	}
 }
 
 // Базовая структура для запроса и ответа
 type req_resp struct {
 	// Параметры заголовка
-	HeaderParams []Param
+	HeaderParams []HeaderParam
 
 	// Тело
 	Body []byte
@@ -60,6 +56,10 @@ type HttpRequest struct {
 	Type, Host string
 }
 
+func MakeRequest(req_type, req_host string, head_params []HeaderParam, body []byte) *HttpRequest {
+	return &HttpRequest{req_resp: req_resp{HeaderParams: head_params, Body: body}, Type: req_type, Host: req_host}
+}
+
 func (req *HttpRequest) Serialize() []byte {
 	header_strs := make([]string, len(req.HeaderParams)+2)
 	header_strs[0] = strings.Join([]string{req.Type, req.Host, http_version}, " ")
@@ -70,10 +70,6 @@ func (req *HttpRequest) Serialize() []byte {
 	}
 
 	return append([]byte(strings.Join(header_strs, endline_str)), req.Body...)
-}
-
-func make_request(req_type string, host string, head_params []Param, body []byte) HttpRequest {
-	return HttpRequest{Type: req_type, Host: host, req_resp: req_resp{HeaderParams: head_params, Body: body}}
 }
 
 // Структура разбора строк запросов
@@ -188,10 +184,10 @@ func (reader *RequestsReader) ParseOne() (res *HttpRequest) {
 		// Разбираем часть заголовка с параметрами
 		var body_len int = -1 // Размер тела запроса (пока не обнаружен)
 		param_strs := strings.Split(s_data, endline_str)
-		reader.unfinished_req.HeaderParams = make([]Param, 0, len(param_strs))
+		reader.unfinished_req.HeaderParams = make([]HeaderParam, 0, len(param_strs))
 		for _, p_str := range param_strs {
 			one_param := param_parser(p_str)
-			if one_param.Name == body_size_param_name {
+			if one_param.Name == BodySizeParamName {
 				// Обнаружили параметр длины тела
 				body_len, _ = strconv.Atoi(one_param.Value)
 			}
@@ -282,6 +278,6 @@ func (resp *HttpResponse) Serialize() []byte {
 	return append([]byte(header), resp.Body...)
 }
 
-func MakeHttpResponse(code uint16, what string, header_params []Param, body []byte) *HttpResponse {
+func MakeResponse(code uint16, what string, header_params []HeaderParam, body []byte) *HttpResponse {
 	return &HttpResponse{req_resp: req_resp{HeaderParams: header_params, Body: body}, Code: code, What: what}
 }

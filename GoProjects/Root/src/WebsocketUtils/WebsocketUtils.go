@@ -1,4 +1,4 @@
-package main
+package WebsocketUtils
 
 /*
 Утилиты поддержки протокола web-сокетов
@@ -14,23 +14,23 @@ const (
 	postfix = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 	// текстовый фрейм.
-	opcode_text byte = 0x1
+	OpcodeText byte = 0x1
 
 	// двоичный фрейм
-	opcode_bin byte = 0x2
+	OpcodeBin byte = 0x2
 
 	// фрейм закрытия соединения
-	opcode_close byte = 0x8
+	OpcodeClose byte = 0x8
 
 	// пинг
-	opcode_ping byte = 0x9
+	OpcodePing byte = 0x9
 
 	// ответ на пинг
-	opcode_pong byte = 0xA
+	OpcodePong byte = 0xA
 
 	// фрейм-продолжение для фрагментированного сообщения и
 	// интерпретируется, исходя из ближайшего предыдущего ненулевого типа
-	opcode_continue byte = 0x0
+	OpcodeContinue byte = 0x0
 )
 
 var (
