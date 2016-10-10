@@ -58,7 +58,7 @@ func (w *write_closer_wrap) CloseWithError(e error) error {
 }
 
 func TestServer(t *testing.T) {
-	srv, err := RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, nil)
+	srv, err := RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, 10, 10, nil)
 	if (srv == nil) || (err != nil) {
 		if err == nil {
 			t.Fatal("Ошибка запуска сервера: RunNewServer вернул nil, nil")
@@ -67,15 +67,17 @@ func TestServer(t *testing.T) {
 		}
 
 	}
-	defer srv.Stop()
+	defer srv.Close()
 
-	srv2, err2 := RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, nil)
+	srv2, err2 := RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, 10, 10, nil)
 	if (srv2 != nil) || (err2 == nil) {
 		t.Error("Ошибка: запущено более одного сервера на одном и том же адресе")
 	}
 
-	srv.Stop()
-	srv, err = RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, nil)
+	if e := srv.Close(); e != nil {
+		t.Fatalf("Ошибка остановки сервера: %s\n", e.Error())
+	}
+	srv, err = RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, 10, 10, nil)
 	if (srv == nil) || (err != nil) {
 		if err == nil {
 			t.Fatal("Ошибка повторного запуска сервера: RunNewServer вернул nil, nil")
@@ -87,10 +89,8 @@ func TestServer(t *testing.T) {
 
 	var counter sync.WaitGroup
 
-	t.Log("Проверка 1")
 	test_func := func() {
 		defer counter.Done()
-		defer t.Log("Подпрограмма завершена")
 
 		c, e := net.Dial("tcp", "127.0.0.1:45000")
 		if e != nil {
@@ -121,15 +121,13 @@ func TestServer(t *testing.T) {
 		} // for i := 0; i < 100; i++ {
 	} // test_func := func() {
 
-	// for n := 0; n < 20; n++ {
-	for n := 0; n < 0; n++ {
+	for n := 0; n < 20; n++ {
 		counter.Add(1)
 		go test_func()
 	}
 
 	counter.Wait()
 
-	t.Log("Проверка 2")
 	test_func2 := func() {
 		defer counter.Done()
 
@@ -169,7 +167,70 @@ func TestServer(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	t.Log("Останавливаем сервер")
-	srv.Stop()
+	if e := srv.Close(); e != nil {
+		t.Fatalf("Ошибка остановки сервера: %s\n", e.Error())
+	}
 	counter.Wait()
-}
+} // func TestServer(t *testing.T)
+
+func TestServerDeep(t *testing.T) {
+	srv, err := RunNewServer("127.0.0.1", 45000, func(wc io.WriteCloser) DataConsumer { return &write_closer_wrap{wc: wc} }, 100, 10000, nil)
+	if (srv == nil) || (err != nil) {
+		if err == nil {
+			t.Fatal("Ошибка запуска сервера: RunNewServer вернул nil, nil")
+		} else {
+			t.Fatal("Ошибка запуска сервера: ", err)
+		}
+
+	}
+	defer srv.Close()
+
+	var counter sync.WaitGroup
+
+	test_func := func() {
+		defer counter.Done()
+
+		c, e := net.Dial("tcp", "127.0.0.1:45000")
+		if e != nil {
+			t.Error("Ошибка подключения к серверу: ", e)
+			return
+		}
+
+		defer c.Close()
+		buf1 := []byte{1, 2, 3}
+		buf2 := make([]byte, len(buf1))
+
+		for i := 0; i < 5; i++ {
+			sz, e := c.Write(buf1)
+			if (sz != len(buf1)) || (e != nil) {
+				t.Error("Ошибка отправки данных: ", sz, "; ", e)
+				return
+			} else {
+				sz, e = c.Read(buf2)
+				if (sz != len(buf1)) || (e != nil) {
+					t.Error("Ошибка считывания данных данных: ", sz, "; ", e)
+					return
+				} else if bytes.Compare(buf1, buf2) != 0 {
+					t.Error("Считанные (", buf2, ") и полученные (", buf2, ") данные отличаются")
+					return
+				}
+			}
+
+			for t := 0; t < len(buf1); t++ {
+				buf1[t] = buf1[t] + byte(t)
+			}
+		} // for i := 0; i < 100; i++ {
+	} // test_func := func() {
+
+	for step := 0; step < 10; step++ {
+		for n := 0; n < 1000; n++ {
+			counter.Add(1)
+			go test_func()
+		}
+		counter.Wait()
+	}
+
+	if e := srv.Close(); e != nil {
+		t.Fatalf("Ошибка остановки сервера: %s\n", e.Error())
+	}
+} // func TestServerDeep(t *testing.T)

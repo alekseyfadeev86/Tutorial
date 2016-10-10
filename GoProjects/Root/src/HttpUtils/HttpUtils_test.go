@@ -107,40 +107,40 @@ func compare_http_req(req1, req2 *HttpRequest) bool {
 	return true
 } // func compare_http_req( req1, req2 *HttpRequest )
 
-func test_parser(parser *RequestsParser, src_data []byte, expected_res []*HttpRequest, expected_data_left []byte, t *testing.T) {
-	var sz int
-	var e error
+func test_parser(src_data []byte, expected_res []*HttpRequest, expected_data_left []byte, t *testing.T) {
 	data_to_write := src_data
+	var res []*HttpRequest
 
-	uw_data_sz := len(parser.unworked_data)
-	for len(data_to_write) > 0 {
-		cur_data := data_to_write
-		if len(cur_data) > 3 {
-			cur_data = cur_data[:3]
-		}
+	for {
+		req, left_data, success := ParseOneReq(data_to_write)
 
-		cur_sz, cur_e := parser.Write(cur_data)
-		if (cur_sz < len(cur_data)) && (cur_e == nil) {
-			t.Fatal("Ошибка записи в парсер: ошибку не вернул, но записаны не все данные")
-		}
-
-		if (cur_sz > 0) && (cur_e == nil) {
-			data_to_write = data_to_write[cur_sz:]
-			sz += cur_sz
+		if success {
+			if req != nil {
+				res = append(res, req)
+			}
 		} else {
-			e = cur_e
+			if req == nil {
+				res = append(res, req)
+			} else {
+				t.Fatal("ParseOneReq вернул success==false и ненулевой req")
+			}
+		}
+
+		if len(left_data) > len(data_to_write) {
+			t.Fatal("На выходе из ParseOneReq получили больше данных, чем вводили")
+		}
+
+		if len(left_data) == len(data_to_write) {
+			// Ничего не обработали
 			break
 		}
+		data_to_write = left_data
 	}
 
-	if (sz != len(src_data)) || (e != nil) {
-		t.Fatalf("Ошибка записи: ожидали %d, nil, получили %d, %s\n", len(src_data), sz, e.Error())
-	} else if (len(parser.unworked_data) != (uw_data_sz + len(src_data))) ||
-		(bytes.Compare(parser.unworked_data[uw_data_sz:], src_data) != 0) {
-		t.Fatalf("Ошибка записи: данные записаны некорректно (записали %s, получили %s)\n", string(src_data), string(parser.unworked_data))
+	if bytes.Compare(data_to_write, expected_data_left) != 0 {
+		t.Fatalf("Массив необработанных данных (%v) не соответствует ожидаемому (%v)\n", data_to_write, expected_data_left)
 	}
 
-	res := parser.Parse()
 	if len(res) != len(expected_res) {
 		t.Fatalf("Длина полученного массива (%d) не равна длине ожидаемого (%d)\n", len(res), len(expected_res))
 	} else {
@@ -156,39 +156,128 @@ func test_parser(parser *RequestsParser, src_data []byte, expected_res []*HttpRe
 			}
 		}
 	}
-
-	if bytes.Compare(parser.unworked_data, expected_data_left) != 0 {
-		t.Fatal("Массив необработанных данных не соответствует ожидаемому")
-	}
 } // func test_parser
 
 func TestRequestsParser(t *testing.T) {
-	var parser RequestsParser
-	if (len(parser.unworked_data) != 0) || (parser.unfinished_req != nil) || (parser.left_data_sz != 0) {
-		t.Fatal("Ошибка создания разборщика запросов")
-	}
-
-	garbage_data := []byte("\r\n\r\nqazqwerty\r\n")
-	test_parser(&parser, garbage_data, []*HttpRequest{nil}, nil, t)
+	garbage_data := []byte("qazqwerty\r\n")
+	test_parser(garbage_data, []*HttpRequest{nil}, nil, t)
 
 	req0 := MakeRequest("GET", "/", nil, nil)
 	norm_data := req0.Serialize()
 	req0.Body = garbage_data
 	data := bytes.Join([][]byte{garbage_data, norm_data, garbage_data}, nil)
-	test_parser(&parser, data, []*HttpRequest{nil, &req0}, nil, t)
+	test_parser(data, []*HttpRequest{nil, &req0}, nil, t)
 
 	body := []byte("qazqwerty")
 	head_params := []HeaderParam{{Name: BodySizeParamName, Value: strconv.Itoa(len(body))}}
 	req0 = MakeRequest("GET", "/", head_params, body)
 	norm_data = req0.Serialize()
 	data = bytes.Join([][]byte{garbage_data, norm_data, garbage_data, norm_data, norm_data, garbage_data}, nil)
-	test_parser(&parser, data, []*HttpRequest{nil, &req0, nil, &req0, &req0, nil}, nil, t)
+	test_parser(data, []*HttpRequest{nil, &req0, nil, &req0, &req0, nil}, nil, t)
 
 	head_params = []HeaderParam{{Name: BodySizeParamName, Value: "qazqwerty"}}
 	req0 = MakeRequest("GET", "/", head_params, body)
 	norm_data = req0.Serialize()
 	data = bytes.Join([][]byte{garbage_data, norm_data, garbage_data}, nil)
-	test_parser(&parser, data, []*HttpRequest{nil, nil, nil}, nil, t)
+	test_parser(data, []*HttpRequest{nil, nil, nil}, nil, t)
+} // func TestRequestsParser(t *testing.T)
+
+func compare_http_resp(resp1, resp2 *HttpResponse) bool {
+	if (resp1 == nil) != (resp2 == nil) {
+		return false
+	} else if resp1 == nil {
+		return true
+	}
+
+	if (resp1.Code != resp2.Code) ||
+		(resp1.What != resp2.What) ||
+		(len(resp1.HeaderParams) != len(resp2.HeaderParams)) ||
+		(bytes.Compare(resp1.Body, resp2.Body) != 0) {
+		return false
+	} else if resp1.HeaderParams != nil {
+		for i, v := range resp1.HeaderParams {
+			if (resp2.HeaderParams[i].Name != v.Name) || (resp2.HeaderParams[i].Value != v.Value) {
+				return false
+			}
+		}
+	}
+
+	return true
+} // func compare_http_resp( req1, req2 *HttpResponse )
+
+func test_parser_resp(src_data []byte, expected_res []*HttpResponse, expected_data_left []byte, t *testing.T) {
+	data_to_write := src_data
+	var res []*HttpResponse
+
+	for {
+		resp, left_data, success := ParseOneResp(data_to_write)
+
+		if success {
+			if resp != nil {
+				res = append(res, resp)
+			}
+		} else {
+			if resp == nil {
+				res = append(res, resp)
+			} else {
+				t.Fatal("ParseOneReq вернул success==false и ненулевой resp")
+			}
+		}
+
+		if len(left_data) > len(data_to_write) {
+			t.Fatal("На выходе из ParseOneReq получили больше данных, чем вводили")
+		}
+
+		if len(left_data) == len(data_to_write) {
+			// Ничего не обработали
+			break
+		}
+		data_to_write = left_data
+	}
+
+	if bytes.Compare(data_to_write, expected_data_left) != 0 {
+		t.Fatalf("Массив необработанных данных (%v) не соответствует ожидаемому (%v)\n", data_to_write, expected_data_left)
+	}
+
+	if len(res) != len(expected_res) {
+		t.Fatalf("Длина полученного массива (%d) не равна длине ожидаемого (%d)\n", len(res), len(expected_res))
+	} else {
+		for i := range expected_res {
+			if expected_res[i] != nil {
+				if res[i] == nil {
+					t.Errorf("Ошибка в %d-м элементе результата: получен нулевой элемент, когда ожидался ненулевой\n", t)
+				} else if !compare_http_resp(res[i], expected_res[i]) {
+					t.Errorf("Ошибка в %d-м элементе результата: ожидали %s, получили %s\n", t, res[i].Serialize(), expected_res[i].Serialize())
+				}
+			} else if res[i] != nil {
+				t.Errorf("Ошибка в %d-м элементе результата: получен ненулевой элемент, когда ожидался нулевой\n", t)
+			}
+		}
+	}
+} // func test_parser_resp
+
+func TestResponsesParser(t *testing.T) {
+	garbage_data := []byte("qazqwerty\r\n")
+	test_parser_resp(garbage_data, []*HttpResponse{nil}, nil, t)
+
+	resp0 := MakeResponse(200, "OK", nil, nil)
+	norm_data := resp0.Serialize()
+	resp0.Body = garbage_data
+	data := bytes.Join([][]byte{garbage_data, norm_data, garbage_data}, nil)
+	test_parser_resp(data, []*HttpResponse{nil, &resp0}, nil, t)
+
+	body := []byte("qazqwerty")
+	head_params := []HeaderParam{{Name: BodySizeParamName, Value: strconv.Itoa(len(body))}}
+	resp0 = MakeResponse(404, "Nea", head_params, body)
+	norm_data = resp0.Serialize()
+	data = bytes.Join([][]byte{garbage_data, norm_data, garbage_data, norm_data, norm_data, garbage_data}, nil)
+	test_parser_resp(data, []*HttpResponse{nil, &resp0, nil, &resp0, &resp0, nil}, nil, t)
+
+	head_params = []HeaderParam{{Name: BodySizeParamName, Value: "qazqwerty"}}
+	resp0 = MakeResponse(200, "Norm", head_params, body)
+	norm_data = resp0.Serialize()
+	data = bytes.Join([][]byte{garbage_data, norm_data, garbage_data}, nil)
+	test_parser_resp(data, []*HttpResponse{nil, nil, nil}, nil, t)
 } // func TestRequestsParser(t *testing.T)
 
 func TestCommon2(t *testing.T) {

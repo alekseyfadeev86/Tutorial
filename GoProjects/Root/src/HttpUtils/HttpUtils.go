@@ -115,178 +115,214 @@ func MakeResponse(code uint16, what string, header_params []HeaderParam, body []
 	return HttpResponse{req_resp: req_resp{HeaderParams: header_params, Body: body}, Code: code, What: what}
 }
 
-// Структура разбора запросов в виде набора байт (потоконебезопасная)
-type RequestsParser struct {
-	// Необработанные данные
-	unworked_data []byte
+// Функция разбора входящих данных и формирования объектов req_resp
+// Возвращаемый результат: сформированный объект (при наличии), необработанные данные,
+// успешность выполнения (если false - получен некорректный запрос)
+func parse_one_req_resp(data []byte) (rr *req_resp, unworked_data []byte, success bool) {
+	unworked_data = data
+	success = true
 
-	// Незаконченный объект запроса (не заполнены параметры и/или незаполненное тело)
-	unfinished_req *HttpRequest
+	endl := []byte(endline_str) // Конец строки
+	rr = &req_resp{}
 
-	// Размер недостающих данных для формирования тела объекта
-	left_data_sz uint64
-}
+	// Формируем параметры запроса
+	pos := bytes.Index(unworked_data, endl)
+	for ; pos >= 0; pos = bytes.Index(unworked_data, endl) {
+		one_param_str := string(unworked_data[:pos])
+		unworked_data = unworked_data[pos+len(endl):]
 
-// Добавление новых данных
-func (parser *RequestsParser) Write(data []byte) (int, error) {
-	parser.unworked_data = append(parser.unworked_data, data...)
-	return len(data), nil
-} // func (p *RequestsParser) Write(data []byte) (int, error)
+		if pos == 0 {
+			// Дошли до конца заголовка
+			break
+		}
 
-// Формирование одного запроса из прочитанных данных
-// Результат - сформированный запрос (если есть) и наличие неправильно сформированного запроса
-func (parser *RequestsParser) parse_one() (*HttpRequest, bool) {
-	if len(parser.unworked_data) == 0 {
-		// Нечего обрабатывать
-		return nil, false
+		// Обрабатываем параметр заголовка
+		param, succ := param_parser(one_param_str)
+		if succ {
+			// Обработали один параметр
+			rr.HeaderParams = append(rr.HeaderParams, param)
+		} else {
+			// Ошибка разбора параметра заголовка
+			rr = nil
+			success = false
+			return
+		}
+	} // for ; pos >= 0; pos = bytes.Index(parser.unworked_data, endl)
+
+	if pos < 0 {
+		// Символ перехода на следующую строку не найден
+		rr = nil
+		unworked_data = data
+		return
 	}
 
-	endl := []byte(endline_str)
-	if parser.unfinished_req == nil {
-		// Незавершённого запроса нет - формируем новый
-
-		req_identifier := []byte(http_version + endline_str) // Признак запроса (версия HTTP + символы конца строки)
-
-		for (parser.unfinished_req == nil) && (len(parser.unworked_data) > 0) {
-			p_req_id := bytes.Index(parser.unworked_data, req_identifier)
-			p_endl := -1
-			if p_req_id >= 0 {
-				p_endl = bytes.LastIndex(parser.unworked_data[:p_req_id], endl)
-			} else {
-				p_endl = bytes.LastIndex(parser.unworked_data, endl)
+	// Если попали сюда - параметры заголовка считаны
+	var body_len int = -1
+	for _, param := range rr.HeaderParams {
+		if param.Name == BodySizeParamName {
+			// Обнаружили параметр длины тела
+			var e error
+			body_len, e = strconv.Atoi(param.Value)
+			if e != nil {
+				// Некорректное значение параметра длины
+				rr = nil
+				success = false
+				return
 			}
 
-			if p_endl >= 0 {
-				// Обнаружен переход на следующую строку перед признаком запроса - косяк
-				parser.unworked_data = parser.unworked_data[p_endl+len(endline_str):]
-				if len(parser.unworked_data) == 0 {
-					parser.unworked_data = nil
-				}
-
-				return nil, true
-			} else if p_req_id >= 0 {
-				// Найден признак запроса
-				p_req_id += len(req_identifier)
-				params := strings.Split(string(parser.unworked_data[:p_req_id]), " ")
-				parser.unworked_data = parser.unworked_data[p_req_id:]
-				if len(parser.unworked_data) == 0 {
-					parser.unworked_data = nil
-				}
-
-				if len(params) != 3 {
-					// Неверный заголовок parser.unworked_data = parser.unworked_data[:p_endl+len(endl)]
-					return nil, true
-				} // if len(params) != 3
-
-				parser.unfinished_req = &HttpRequest{Type: params[0], Host: params[1]}
-			} else { // if p_endl >= 0 {...} else if p_req_id >= 0 {
-				// Не нашли ни признака запроса, ни перехода на следующую строку
-				break
-			}
-		} // for (parser.unfinished_req == nil) && (len(parser.unworked_data) > 0)
-
-		if parser.unfinished_req == nil {
-			return nil, false
+			break
 		}
-	} // if parser.unfinished_req == nil
+	}
 
-	if parser.left_data_sz == 0 {
-		// Параметры запроса ещё не сформированы
-		pos := bytes.Index(parser.unworked_data, endl)
-		for ; pos >= 0; pos = bytes.Index(parser.unworked_data, endl) {
-			one_param_str := string(parser.unworked_data[:pos])
-			parser.unworked_data = parser.unworked_data[pos+len(endl):]
-			if len(parser.unworked_data) == 0 {
-				parser.unworked_data = nil
-			}
+	if body_len < 0 {
+		// В параметрах не содержится длина тела - тупо записываем в него всё, что успели прочитать
+		body_len = len(unworked_data)
+	}
 
-			if pos == 0 {
-				// Дошли до конца заголовка
-				break
-			}
-
-			// Обрабатываем параметр заголовка
-			param, success := param_parser(one_param_str)
-			if success {
-				// Обработали один параметр
-				parser.unfinished_req.HeaderParams = append(parser.unfinished_req.HeaderParams, param)
-			} else {
-				// Ошибка разбора параметра заголовка
-				parser.unfinished_req = nil
-				return nil, true
-			}
-		} // for ; pos >= 0; pos = bytes.Index(parser.unworked_data, endl)
-
-		if pos < 0 {
-			// Символ перехода на следующую строку не найден
-			return nil, false
-		}
-
-		// Если попали сюда - параметры заголовка считаны
-		var body_len int = -1
-		for _, param := range parser.unfinished_req.HeaderParams {
-			if param.Name == BodySizeParamName {
-				// Обнаружили параметр длины тела
-				var e error
-				body_len, e = strconv.Atoi(param.Value)
-				if e != nil {
-					// Некорректное значение параметра длины
-					parser.unfinished_req = nil
-					return nil, true
-				}
-
-				break
-			}
-		}
-
-		if body_len > 0 {
-			// В параметрах содержится ненулевая длина тела
-			parser.left_data_sz = uint64(body_len)
-		} else {
-			// В параметрах не содержится длина тела - тупо записываем в него всё, что успели прочитать
-			parser.left_data_sz = uint64(len(parser.unworked_data))
-		}
-
-		// Создаём пустой массив нужного размера (чтобы потом не выделять память повторно)
-		parser.unfinished_req.Body = make([]byte, 0, parser.left_data_sz)
-	} // if parser.left_data_sz == 0
+	if len(unworked_data) < body_len {
+		// Недостаточно данных для формирования запроса
+		rr = nil
+		unworked_data = data
+		return
+	}
 
 	// Формируем тело запроса
-	var cut_len uint64 = uint64(len(parser.unworked_data))
-	if cut_len > parser.left_data_sz {
-		cut_len = parser.left_data_sz
+	rr.Body = unworked_data[:body_len]
+	unworked_data = unworked_data[body_len:]
+	return
+} // func parse_one_req_resp(data []byte) (rr *req_resp, unworked_data []byte, success bool)
+
+// Функция разбора входящих данных и формирования объектов HttpRequest
+// Возвращаемый результат: сформированный запрос (при наличии), необработанные данные,
+// успешность выполнения (если false - получен некорректный запрос)
+func ParseOneReq(data []byte) (req *HttpRequest, unworked_data []byte, success bool) {
+	unworked_data = data
+	success = true
+
+	endl := []byte(endline_str)                          // Конец строки
+	req_identifier := []byte(http_version + endline_str) // Признак запроса (версия HTTP + символы конца строки)
+
+	// Ищем заголовок
+	p_req_id := bytes.Index(unworked_data, req_identifier)
+	p_endl := -1
+	if p_req_id >= 0 {
+		p_endl = bytes.LastIndex(unworked_data[:p_req_id], endl)
+	} else {
+		p_endl = bytes.LastIndex(unworked_data, endl)
 	}
 
-	// Добавляем полученные данные в конец тела запроса
-	parser.unfinished_req.Body = append(parser.unfinished_req.Body, parser.unworked_data[:cut_len]...)
+	if p_endl >= 0 {
+		// Обнаружен переход на следующую строку перед признаком запроса - косяк
+		unworked_data = unworked_data[p_endl+len(endline_str):]
+		success = false
+		return
+	} else if p_req_id >= 0 {
+		// Найден признак запроса
+		p_req_id += len(req_identifier)
+		params := strings.Split(string(unworked_data[:p_req_id]), " ")
+		unworked_data = unworked_data[p_req_id:]
 
-	parser.unworked_data = parser.unworked_data[cut_len:]
-	if len(parser.unworked_data) == 0 {
-		parser.unworked_data = nil
+		if len(params) != 3 {
+			// Неверный заголовок
+			success = false
+			return
+		} // if len(params) != 3
+
+		req = &HttpRequest{Type: params[0], Host: params[1]}
+	} else {
+		// Не нашли ни признака запроса, ни перехода на следующую строку
+		unworked_data = data
+		return
 	}
 
-	var res *HttpRequest
-	parser.left_data_sz -= cut_len
-	if parser.left_data_sz == 0 {
-		// Тело запроса полностью сформировано, запрос готов
-		res = parser.unfinished_req
-		parser.unfinished_req = nil
+	// Формируем параметры и тело запроса
+	var rr *req_resp
+	rr, unworked_data, success = parse_one_req_resp(unworked_data)
+	if rr != nil {
+		req.req_resp = *rr
+	} else {
+		req = nil
+		if success {
+			unworked_data = data
+		}
 	}
 
-	return res, false
-} // func (parser *HttpRequest) parse_one() (*HttpRequest, bool)
+	return
+} // func ParseOneReq(data []byte) (req *HttpRequest, unworked_data []byte, success bool)
 
-// Разбор прочитанных данных и формирование массива запросов HTTP
-// Если в данных встречается участок неправильного формата - для него формируется нулевой указатель
-func (parser *RequestsParser) Parse() []*HttpRequest {
-	var res []*HttpRequest
+// Функция разбора входящих данных и формирования объектов HttpResponse
+// Возвращаемый результат: сформированный запрос (при наличии), необработанные данные,
+// успешность выполнения (если false - получен некорректный запрос)
+func ParseOneResp(data []byte) (resp *HttpResponse, unworked_data []byte, success bool) {
+	unworked_data = data
+	success = true
 
-	for req, err := parser.parse_one(); (req == nil) == err; req, err = parser.parse_one() {
-		res = append(res, req)
+	endl := []byte(endline_str) // Конец строки
+	b_http_ver := []byte(http_version)
+
+	// Ищем заголовок
+	p_resp_id := bytes.Index(unworked_data, b_http_ver)
+	if p_resp_id > 0 {
+		// Перед ответом какие-от левые данные
+		success = false
+		unworked_data = unworked_data[p_resp_id:]
+		return
 	}
 
-	return res
-} // func (parser *RequestsParser) Parse() []*HttpRequest
+	// Ищем конец строки
+	p_endl := bytes.Index(unworked_data, endl)
+	if p_endl < 0 {
+		// Переход на следующую строку не найден - недостаточно данных для формирования запроса
+		unworked_data = data
+		return
+	} else if p := bytes.LastIndex(unworked_data[:p_endl], b_http_ver); p > 0 {
+		// В этой же строке обнаружен ещё как минимум один признак заголовка
+		unworked_data = unworked_data[p:]
+		success = false
+		return
+	}
+
+	// Разбираем первую строку
+	head_line := string(unworked_data[len(http_version):p_endl])
+	unworked_data = unworked_data[p_endl+len(endl):]
+	if head_line[0] != ' ' {
+		// После версии HTTP идёт не пробел
+		success = false
+		return
+	}
+
+	head_line = head_line[1:]
+	var params [2]string
+	if p := strings.Index(head_line, " "); p > 0 {
+		params[0] = head_line[:p]
+		params[1] = head_line[p+1:]
+	} else {
+		params[0] = head_line
+	}
+
+	if code, err := strconv.Atoi(params[0]); err == nil {
+		// Успех
+		resp = &HttpResponse{Code: uint16(code), What: params[1]}
+	} else {
+		// Некорректная первая строка заголовка
+		success = false
+		return
+	}
+
+	// Формируем параметры и тело запроса
+	var rr *req_resp
+	rr, unworked_data, success = parse_one_req_resp(unworked_data)
+	if rr != nil {
+		resp.req_resp = *rr
+	} else {
+		resp = nil
+		if success {
+			unworked_data = data
+		}
+	}
+
+	return
+} // func ParseOneResp(data []byte) (resp *HttpResponse, unworked_data []byte, success bool)
 
 // Базовая структура для запроса и ответа
 type big_req_resp struct {
@@ -560,7 +596,7 @@ func (parser *BigRequestsParser) Parse() (res []*HttpBigRequest) {
 		} else if body_len != 0 {
 			// Всё тело ещё не считали
 			var one_piece_max_sz int = body_len
-			var chan_sz uint8 = 2
+			var chan_sz uint16 = 2
 
 			if one_piece_max_sz > 10240 {
 				one_piece_max_sz = 10240

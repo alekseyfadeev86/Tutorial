@@ -9,7 +9,7 @@ import (
 
 func TestByteArrayStorage(t *testing.T) {
 	var array_capacity int = 1000
-	var storage_size uint8 = 10
+	var storage_size uint16 = 10
 	storage := CreateByteArrayStorage(array_capacity, storage_size)
 
 	wg := sync.WaitGroup{}

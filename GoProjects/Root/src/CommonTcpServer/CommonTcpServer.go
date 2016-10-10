@@ -1,6 +1,7 @@
 package CommonTcpServer
 
 import (
+	"IoUtils"
 	"io"
 	"net"
 	"strconv"
@@ -61,7 +62,12 @@ type Server struct {
 }
 
 // Запуск сервера
-func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, printer func(msg interface{})) error {
+func (s *Server) start(host string,
+	port uint16,
+	dw_maker DataWorkersMaker,
+	rcv_buf_sz uint16,
+	expected_conns_count uint16,
+	printer func(msg interface{})) error {
 	port_str := strconv.Itoa(int(port))
 	full_host := host + ":" + port_str
 
@@ -74,9 +80,19 @@ func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, prin
 		return err
 	}
 
+	if rcv_buf_sz == 0 {
+		rcv_buf_sz = 1024
+	}
+
 	if printer == nil {
 		printer = func(interface{}) {}
 	}
+
+	if expected_conns_count < 1 {
+		expected_conns_count = 10000
+	}
+
+	allocator := IoUtils.CreateByteArrayStorage(int(rcv_buf_sz), uint16(expected_conns_count))
 
 	s.stopper = make(chan interface{}, 1)
 
@@ -86,7 +102,12 @@ func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, prin
 		defer func() { s.goroutines_counter.Done() }()
 
 		// Принимаем входящие соединения и обрабатываем их
-		for c, e := s.listener.Accept(); e == nil; c, e = s.listener.Accept() {
+		for c, e := s.listener.Accept(); atomic.LoadInt32(&s.must_be_stopped) == 0; c, e = s.listener.Accept() {
+			if e != nil {
+				// Ошибка
+				continue
+			}
+
 			// Соединение принято
 			conn := c
 
@@ -95,17 +116,17 @@ func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, prin
 				var sz int
 				var s_err error
 
-				for s_buf := buf; (s_err == nil) && (len(s_buf) > 0); {
-					sz, s_err = conn.Write(s_buf)
+				for (s_err == nil) && (len(buf) > 0) {
+					sz, s_err = conn.Write(buf)
 					if sz > 0 {
-						s_buf = s_buf[sz:]
+						buf = buf[sz:]
 						send_sz += sz
 					} else {
 						if s_err == nil {
 							s_err = io.EOF
 						}
 					}
-				} // for s_buf := buf, (s_err == nil) && (len(s_buf) > 0);
+				} // for (s_err == nil) && (len(s_buf) > 0)
 
 				return send_sz, s_err
 			}
@@ -140,9 +161,14 @@ func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, prin
 				}()
 
 				printer("Читатель запущен")
-				buf := make([]byte, 1000)
+				buf := allocator.Pop()
+				buf = buf[:cap(buf)]
 
-				for sz, e := conn.Read(buf); e == nil; sz, e = conn.Read(buf) {
+				defer allocator.Push(buf)
+
+				var sz int
+				var e error
+				for sz, e = conn.Read(buf); e == nil; sz, e = conn.Read(buf) {
 					if sz == 0 {
 						// Соединение закрыто удалённой стороной
 						e = io.EOF
@@ -187,10 +213,10 @@ func (s *Server) start(host string, port uint16, dw_maker DataWorkersMaker, prin
 	}()
 
 	return nil
-} // func (s *Server) Start
+} // func (s *Server) start() error
 
 // Останавливаем сервер
-func (s *Server) Stop() {
+func (s *Server) Close() (e error) {
 	if !atomic.CompareAndSwapInt32(&s.must_be_stopped, 0, 1) {
 		return
 	}
@@ -203,12 +229,20 @@ func (s *Server) Stop() {
 
 	// Ждём завершения подпрограмм и выходим
 	s.goroutines_counter.Wait()
-} // func (s *Server) Stop {
+
+	return
+} // func (s *Server) Close() (e error) {
 
 // Функция запуска сервера. Возвращает запущенный сервер и nil в случае успеха, иначе - nil и ошибку
-func RunNewServer(host string, port uint16, dw_maker DataWorkersMaker, printer func(msg interface{})) (*Server, error) {
+func RunNewServer(host string,
+	port uint16,
+	dw_maker DataWorkersMaker,
+	rcv_buf_sz uint16,
+	expected_conns_count uint16,
+	printer func(msg interface{})) (*Server, error) {
 	s := &Server{}
-	err := s.start(host, port, dw_maker, printer)
+	err := s.start(host, port, dw_maker, rcv_buf_sz, expected_conns_count, printer)
+
 	if err == nil {
 		return s, nil
 	}

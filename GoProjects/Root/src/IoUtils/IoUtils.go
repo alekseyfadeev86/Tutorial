@@ -54,7 +54,7 @@ func (s *ByteArrayStorage) Pop() []byte {
 	}
 }
 
-func CreateByteArrayStorage(array_capacity int, storage_size uint8) ByteArrayStorage {
+func CreateByteArrayStorage(array_capacity int, storage_size uint16) ByteArrayStorage {
 	return ByteArrayStorage{keeper: make(chan []byte, storage_size), array_capacity: array_capacity}
 }
 
@@ -162,7 +162,7 @@ func (c *byte_chan_wrap) Close() (e error) {
 
 // Создаёт канал, в котором io.Writer.Write не ждёт, когда закончится операция считывания
 // Оба конца канала (читатель и писатель) потоконебезопасные
-func NonBlockingPipe(one_piece_max_sz int, chan_sz uint8) (io.ReadCloser, io.WriteCloser) {
+func NonBlockingPipe(one_piece_max_sz int, chan_sz uint16) (io.ReadCloser, io.WriteCloser) {
 	c := &byte_chan_wrap{channel: make(chan []byte, chan_sz), buf_storage: CreateByteArrayStorage(one_piece_max_sz, 2*chan_sz)}
 	return c, c
 }

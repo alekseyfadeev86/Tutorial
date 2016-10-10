@@ -465,7 +465,7 @@ func (p *BigFrameParser) Parse() (res []BigFrame) {
 		} else {
 			// Всё тело ещё не считали
 			var one_piece_max_sz int = int(data_sz)
-			var chan_sz uint8 = 2
+			var chan_sz uint16 = 2
 
 			if one_piece_max_sz > 10240 {
 				one_piece_max_sz = 10240
