@@ -44,7 +44,11 @@ func (w *EchoWsWorker) Close() error {
 func make_handler(root_dir string) func(req *HttpUtils.HttpRequest) (*HttpUtils.HttpResponse, CommonWebServer.WsWorker) {
 	resp_bad_req := HttpUtils.MakeResponse(400, "Bad request", nil, nil)
 
+	head_params := []HttpUtils.HeaderParam{{"Content-Length", "0"}, {"Content-Type", "text/plain; charset=utf-8"}, {"Connection", "keep-alive"}}
+	resp_good_req := HttpUtils.MakeResponse(200, "OK", head_params, nil)
+
 	return func(req *HttpUtils.HttpRequest) (*HttpUtils.HttpResponse, CommonWebServer.WsWorker) {
+		return &resp_good_req, nil
 		if req == nil {
 			return &resp_bad_req, nil
 		}

@@ -24,6 +24,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// w.WriteHeader(http.StatusNotFound)
 	// return
 
+	w.WriteHeader(http.StatusOK)
+	return
 	fmt.Println(req.Method, req.URL.String())
 
 	if req.Method != "GET" {

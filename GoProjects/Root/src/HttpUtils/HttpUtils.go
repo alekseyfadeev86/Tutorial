@@ -15,7 +15,7 @@ const (
 	endline_str = "\r\n"
 
 	// Текущая поддерживаемая версия http
-	http_version = "HTTP/1.1"
+	http_version = "HTTP/1.0"
 
 	// Разделитель имени параметра и его значения
 	param_splitter = ": "
