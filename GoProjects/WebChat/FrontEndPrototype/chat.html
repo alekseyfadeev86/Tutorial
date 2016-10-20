@@ -4,7 +4,46 @@
 	<meta charset="utf-8">
 	<title>Вебчат</title>
 </head>
-<body>
-	<p>Тут будут поля чтения/отправки сообщений, кнопка отправки сообщения и список контактов в сети</p>
+<body onload="on_load()" onunload="window.clearInterval(document.CycleId);">
+    <script>
+    function on_load()
+    {
+    	document.ReceivedMessages = []
+    	document.CycleId = window.setInterval( test_cycle, 100 )
+    }
+
+    function test_cycle()
+    {
+    	// Имитирует запрос данных от сервера и получение ответа
+    	l = document.ReceivedMessages.length
+    	if( l > 0 )
+    	{
+    		recv_elem = document.getElementById("received")
+    		
+    		for( t = 0; t < l; ++t )
+    		{
+    			recv_elem.value += message + "\n"
+    		}
+
+    		document.ReceivedMessages = []
+    	}
+    }
+
+    function send_message_prototype()
+    {
+    	// Прототип функции отправки сообщений
+    	send_elem = document.getElementById("to_send")
+
+    	message = send_elem.value
+    	if( message )
+    	{
+    		send_elem.value = ""
+    		document.ReceivedMessages.push(message)
+    	}
+    }
+    </script>
+
+	<p><textarea id="received" name="rcv_data" cols="120" rows="30" readonly="true"></textarea><textarea name="online_list" readonly="true"></textarea></p>
+	<p><textarea id="to_send" name="snd_data" cols="120" rows="10"></textarea><button type="button" onclick="send_message_prototype()">Отправить сообщение</button></p>
 </body>
 </html>
