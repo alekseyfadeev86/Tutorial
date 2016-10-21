@@ -4,15 +4,108 @@ import (
 	"fmt"
 	"io"
 	// "net"
+	"bytes"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 )
 
 type Handler struct {
+	page              []byte
+	favicon           []byte
+	received_messages [][]byte
+	mutex             sync.Mutex
 }
 
+func read_all(r io.Reader, expect_sz int) (data []byte, err error) {
+	if r == nil {
+		return
+	}
+
+	if expect_sz > 0 {
+		data = make([]byte, 0, expect_sz)
+	}
+
+	buf := make([]byte, 1024)
+	for sz, e := r.Read(buf); ; sz, e = r.Read(buf) {
+		if (sz == 0) && (e == nil) {
+			panic("io.Reader.Read вернул 0, nil")
+		}
+
+		if sz > 0 {
+			data = append(data, buf[:sz]...)
+		}
+
+		if e != nil {
+			if e != io.EOF {
+				err = e
+			}
+			break
+		}
+	}
+
+	return
+} // func read_all(r io.Reader) (data []byte, err error)
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	url := req.URL.String()
+	if req.Method == "POST" {
+		if url == "/msg" {
+			// Поступило сообщение
+			new_message, err := read_all(req.Body, int(req.ContentLength))
+			if (err == nil) && (len(new_message) > 0) {
+				h.mutex.Lock()
+				defer h.mutex.Unlock()
+				h.received_messages = append(h.received_messages, new_message)
+			}
+
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+		return
+	} else if req.Method != "GET" {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+
+	resp_header := w.Header()
+	var resp_body []byte
+	var content_type string
+	if url == "/favicon.ico" {
+		// Запросили иконку
+		resp_body = h.favicon
+	} else if url == "/" {
+		// Запросили страницу чата
+		resp_body = h.page
+	} else if url == "/data" {
+		// Запросили полученные сообщения
+		h.mutex.Lock()
+		defer h.mutex.Unlock()
+		resp_body = bytes.Join(h.received_messages, []byte("\n"))
+		if len(resp_body) == 0 {
+			resp_body = []byte("~~~~~")
+		} else {
+			resp_body = append(resp_body, []byte("\n")...)
+		}
+		h.received_messages = nil
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if content_type == "" {
+		content_type = http.DetectContentType(resp_body)
+	}
+	resp_header[http.CanonicalHeaderKey("Content-Type")] = []string{content_type}
+	resp_header[http.CanonicalHeaderKey("Content-Length")] = []string{strconv.Itoa(len(resp_body))}
+
+	for sz, e := w.Write(resp_body); (e == nil) && (len(resp_body) > 0); sz, e = w.Write(resp_body) {
+		resp_body = resp_body[sz:]
+	}
+
 	// fmt.Println(req.Method)       // GET
 	// fmt.Println(req.Proto)        // HTTP/1.1
 	// fmt.Println(req.URL.String()) // /, /favicon.ico
@@ -24,73 +117,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// w.WriteHeader(http.StatusNotFound)
 	// return
 
-	fmt.Println(req.Method, req.URL.String())
+	// fmt.Println(req.Method, req.URL.String())
+} // func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 
-	if req.Method != "GET" {
-		w.WriteHeader(http.StatusNotImplemented)
-		return
+func read_file(fname string, expect_sz int) (data []byte, err error) {
+	if f, e := os.Open(fname); e == nil {
+		defer f.Close()
+		data, err = read_all(f, expect_sz)
+	} else {
+		err = e
 	}
 
-	url := req.URL.String()
-	if url == "/" {
-		w.Header()[http.CanonicalHeaderKey("Location")] = []string{"/index.html"}
-		w.WriteHeader(http.StatusMovedPermanently)
-		return
-	}
-
-	f, e := os.Open("." + url)
-	if e != nil {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-
-	defer f.Close()
-	buf := make([]byte, 100)
-	var resp_body []byte
-	for {
-		sz, e := f.Read(buf)
-		if (e != nil) && (e != io.EOF) {
-			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Println(e.Error())
-			return
-		} else if sz > 0 {
-			resp_body = append(resp_body, buf[:sz]...)
-
-			if e != nil {
-				break
-			}
-		} else {
-			break
-		}
-	} // for
-
-	resp_header := w.Header()
-	if len(resp_body) > 0 {
-		if url == "/favicon.ico" {
-			resp_header[http.CanonicalHeaderKey("Content-Type")] = []string{"image/x-icon"}
-		} else {
-			resp_header[http.CanonicalHeaderKey("Content-Type")] = []string{http.DetectContentType(resp_body)}
-		}
-
-		resp_header[http.CanonicalHeaderKey("Content-Length")] = []string{strconv.Itoa(len(resp_body))}
-	}
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Println(string(resp_body))
-	for len(resp_body) > 0 {
-		sz, e := w.Write(resp_body)
-		if e != nil {
-			fmt.Println(e.Error())
-			return
-		}
-
-		resp_body = resp_body[sz:]
-	} // for len(resp_body) > 0 {
-} // func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	return
+} // func read_file(fname string, expect_sz int) (data []byte, err error)
 
 func main() {
-	h := Handler{}
-	err := http.ListenAndServe("127.0.0.1:8000", &h)
+	var chat_page []byte
+	var favicon []byte
+	var e error
+
+	chat_page, e = read_file("./FrontEndPrototype/chat.html", 4*1024)
+	if e != nil {
+		fmt.Printf("Ошибка чтения страницы чата: %s\n", e.Error())
+		return
+	}
+
+	favicon, e = read_file("./favicon.ico", -1)
+	if e != nil {
+		fmt.Printf("Ошибка чтения иконки: %s\n", e.Error())
+		return
+	}
+
+	h := Handler{page: chat_page, favicon: favicon}
+	host := "127.0.0.1"
+	port := 8000
+	l := len(os.Args)
+	if l > 1 {
+		host = os.Args[1]
+		if l > 2 {
+			if p, e := strconv.Atoi(os.Args[2]); e == nil {
+				port = p
+			}
+		}
+	}
+
+	err := http.ListenAndServe(fmt.Sprintf("%s:%d", host, port), &h)
 	if err != nil {
 		fmt.Println(err.Error())
 	}

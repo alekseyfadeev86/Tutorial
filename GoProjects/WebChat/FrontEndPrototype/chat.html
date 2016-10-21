@@ -3,47 +3,74 @@
 <head>
 	<meta charset="utf-8">
 	<title>Вебчат</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
 </head>
-<body onload="on_load()" onunload="window.clearInterval(document.CycleId);">
+<body onload="ask_data()">
     <script>
-    function on_load()
+    function ask_data()
     {
-    	document.ReceivedMessages = []
-    	document.CycleId = window.setInterval( test_cycle, 100 )
-    }
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function()
+        {
+            if( xhttp.readyState == 4 )
+            {
+                // Получили ответ
+                if( xhttp.status != 200 )
+                {
+                    alert( "Ошибка HTTP:" + xhttp.status )
+                    return
+                }
 
-    function test_cycle()
-    {
-    	// Имитирует запрос данных от сервера и получение ответа
-    	l = document.ReceivedMessages.length
-    	if( l > 0 )
-    	{
-    		recv_elem = document.getElementById("received")
-    		
-    		for( t = 0; t < l; ++t )
-    		{
-    			recv_elem.value += message + "\n"
-    		}
+                message = xhttp.responseText;
+                if( message != "~~~~~" )
+                {
+                    document.getElementById( "received" ).value += message
+                }
 
-    		document.ReceivedMessages = []
-    	}
+                // Запрашиваем данные снова, спустя определённое время
+                window.setTimeout( ask_data, 100 )
+            }
+        };
+
+        xhttp.open( "GET", "data", true );
+        xhttp.send();
     }
 
     function send_message_prototype()
     {
-    	// Прототип функции отправки сообщений
-    	send_elem = document.getElementById("to_send")
+        message = document.getElementById( "to_send" ).value
+        if( !message )
+        {
+            return
+        }
 
-    	message = send_elem.value
-    	if( message )
-    	{
-    		send_elem.value = ""
-    		document.ReceivedMessages.push(message)
-    	}
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function()
+        {
+            if( xhttp.readyState == 4 )
+            {
+                // Получили ответ
+                document.getElementById( "to_send" ).value = ""
+                if( xhttp.status != 200 )
+                {
+                    alert( "Ошибка HTTP:" + xhttp.status )
+                }
+            }
+        };
+
+        xhttp.open( "POST", "msg", true )
+        xhttp.setRequestHeader( "Content-type", "text/plain" )
+        xhttp.setRequestHeader( "Content-Length", message.length )
+        xhttp.send( message )
     }
     </script>
 
-	<p><textarea id="received" name="rcv_data" cols="120" rows="30" readonly="true"></textarea><textarea name="online_list" readonly="true"></textarea></p>
-	<p><textarea id="to_send" name="snd_data" cols="120" rows="10"></textarea><button type="button" onclick="send_message_prototype()">Отправить сообщение</button></p>
+	<p>
+        <textarea id="received" name="rcv_data" cols="120" rows="20" readonly="true"></textarea>
+        <textarea name="online_list" readonly="true"></textarea>
+    </p>
+	<p><textarea id="to_send" name="snd_data" cols="120" rows="5"></textarea>
+        <button type="button" onclick="send_message_prototype()">Отправить сообщение</button>
+    </p>
 </body>
 </html>
