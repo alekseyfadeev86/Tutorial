@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="utf-8">
+	<title>Форма авторизации</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body>
+	<script type="text/javascript">
+		function send_auth()
+		{
+			login = document.getElementById( "login" ).value
+			pass = document.getElementById( "pass" ).value
+
+			req = new XMLHttpRequest()
+			req.open( "POST", "auth", false, login, pass )
+			req.send()
+
+			if( !req.responseText )
+			{
+				alert( "Ошибка соединения" )
+			}
+			else if( req.responseText == "already_connected" )
+			{
+				alert( "Такой пользователь уже подключён" )
+			}
+			else if( req.responseText == "error" )
+			{
+				alert( "Ошибка авторизации" )
+			}
+			else
+			{
+				document.write( req.responseText )
+			}
+		}
+	</script>
+
+	<div style="text-align: center;">
+		<h1>Авторизуйтесь</h1>
+		<div id="err">&ensp;</div>
+		<p>Логин:&ensp; <input type="text" id="login" name="username"/></p>
+		<p>Пароль: <input type="text" id="pass" name="password"/></p>
+		<p><button type="button" onclick="send_auth()">Отправить сообщение</button></p>
+	</div>
+</body>
+</html>

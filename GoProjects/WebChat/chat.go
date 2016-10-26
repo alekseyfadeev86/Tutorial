@@ -1,14 +1,30 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"io"
-	// "net"
-	"bytes"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+)
+
+const (
+	fake_page = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="utf-8">
+	<title>Просто страница</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+</head>
+<body onload="alert(проверка)">
+	<p>Просто страница-заплатка, которая в дальнейшем будет заменена на что-то другое</p>
+</body>
+</html>
+`
 )
 
 type Handler struct {
@@ -48,8 +64,23 @@ func read_all(r io.Reader, expect_sz int) (data []byte, err error) {
 	return
 } // func read_all(r io.Reader) (data []byte, err error)
 
+func read_file(fname string, expect_sz int) (data []byte, err error) {
+	if f, e := os.Open(fname); e == nil {
+		defer f.Close()
+		data, err = read_all(f, expect_sz)
+	} else {
+		err = e
+	}
+
+	return
+} // func read_file(fname string, expect_sz int) (data []byte, err error)
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	url := req.URL.String()
+	var resp_body []byte
+	resp_header := w.Header()
+	var content_type string
+
 	if req.Method == "POST" {
 		if url == "/msg" {
 			// Поступило сообщение
@@ -59,39 +90,115 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				defer h.mutex.Unlock()
 				h.received_messages = append(h.received_messages, new_message)
 			}
+		} else if url == "/auth" {
+			// Запрос авторизации
+			auth, chk := req.Header["Authorization"]
+			if !chk {
+				resp_header := w.Header()
+				resp_header["WWW-Authenticate"] = []string{"Basic"}
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 
-			w.WriteHeader(http.StatusOK)
+			if bytes.Index([]byte(auth[0]), []byte("Basic ")) != 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			b, e := base64.StdEncoding.DecodeString(auth[0][6:])
+			if e != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			login_pass := strings.Split(string(b), ":")
+			if len(login_pass) != 2 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			// Авторизация пройдена
+			if login_pass[0] == "vasya" {
+				resp_body = []byte("already_connected")
+			} else if login_pass[0] == "petya" {
+				resp_body = []byte("error")
+			} else {
+				resp_header := w.Header()
+				resp_header["Set-Cookie"] = []string{"token=123456"}
+				resp_body = []byte(fake_page)
+			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
+			return
 		}
-		return
-	} else if req.Method != "GET" {
-		w.WriteHeader(http.StatusNotImplemented)
-		return
-	}
+	} else if req.Method == "GET" {
+		if url == "/favicon.ico" {
+			// Запросили иконку
+			resp_body = h.favicon
+		} else if url == "/chat" {
+			// Запросили страницу чата
+			resp_body = h.page
+		} else if url == "/data" {
+			// Запросили полученные сообщения
+			h.mutex.Lock()
+			defer h.mutex.Unlock()
+			resp_body = bytes.Join(h.received_messages, []byte("\n"))
+			if len(resp_body) == 0 {
+				resp_body = []byte("~~~~~")
+			} else {
+				resp_body = append(resp_body, []byte("\n")...)
+			}
+			h.received_messages = nil
+		} else if url == "/" {
+			resp_header := w.Header()
+			if cookie, found := resp_header["Cookie"]; found {
+				for _, p := range cookie {
+					if (strings.Index(p, "token=") == 0) && (p[6:] == "123456") {
+						resp_body = []byte(fake_page)
+						break
+					}
+				}
+			}
 
-	resp_header := w.Header()
-	var resp_body []byte
-	var content_type string
-	if url == "/favicon.ico" {
-		// Запросили иконку
-		resp_body = h.favicon
-	} else if url == "/" {
-		// Запросили страницу чата
-		resp_body = h.page
-	} else if url == "/data" {
-		// Запросили полученные сообщения
-		h.mutex.Lock()
-		defer h.mutex.Unlock()
-		resp_body = bytes.Join(h.received_messages, []byte("\n"))
-		if len(resp_body) == 0 {
-			resp_body = []byte("~~~~~")
+			if len(resp_body) == 0 {
+				var err error
+				resp_body, err = read_file("./FrontEndPrototype/auth.html", 4*1024)
+				if err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+			}
+
+			// auth, chk := req.Header["Authorization"]
+			// if chk {
+			// 	fmt.Println(auth)
+			// 	if bytes.Index([]byte(auth[0]), []byte("Basic ")) != 0 {
+			// 		w.WriteHeader(http.StatusBadRequest)
+			// 		return
+			// 	}
+
+			// 	b, e := base64.StdEncoding.DecodeString(auth[0][6:])
+			// 	if e != nil {
+			// 		fmt.Println(e)
+			// 		w.WriteHeader(http.StatusBadRequest)
+			// 		return
+			// 	}
+
+			// 	// Авторизация пройдена
+			// 	f := "<!DOCTYPE html>\n<html lang=\"ru\">\n<head>\n<meta charset=\"UTF-8\">\n<title>Проверка</title>\n</head>\n<body>\n<h1>Здравствуй, %s</h1>\n</body>\n</html>"
+			// 	resp_body = []byte(fmt.Sprintf(f, string(b)))
+			// } else {
+			// 	resp_header := w.Header()
+			// 	resp_header["WWW-Authenticate"] = []string{"Basic"}
+			// 	w.WriteHeader(http.StatusUnauthorized)
+			// 	return
+			// }
 		} else {
-			resp_body = append(resp_body, []byte("\n")...)
+			w.WriteHeader(http.StatusNotFound)
+			return
 		}
-		h.received_messages = nil
 	} else {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusNotImplemented)
 		return
 	}
 
@@ -119,17 +226,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// fmt.Println(req.Method, req.URL.String())
 } // func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request)
-
-func read_file(fname string, expect_sz int) (data []byte, err error) {
-	if f, e := os.Open(fname); e == nil {
-		defer f.Close()
-		data, err = read_all(f, expect_sz)
-	} else {
-		err = e
-	}
-
-	return
-} // func read_file(fname string, expect_sz int) (data []byte, err error)
 
 func main() {
 	var chat_page []byte
