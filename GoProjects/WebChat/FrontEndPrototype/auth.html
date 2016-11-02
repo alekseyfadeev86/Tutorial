@@ -30,7 +30,7 @@
 			}
 			else
 			{
-				document.write( req.responseText )
+				document.location.href = req.responseText
 			}
 		}
 	</script>
@@ -40,7 +40,7 @@
 		<div id="err">&ensp;</div>
 		<p>Логин:&ensp; <input type="text" id="login" name="username"/></p>
 		<p>Пароль: <input type="text" id="pass" name="password"/></p>
-		<p><button type="button" onclick="send_auth()">Отправить сообщение</button></p>
+		<p><button type="button" onclick="send_auth()">Авторизоваться</button></p>
 	</div>
 </body>
 </html>

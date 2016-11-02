@@ -94,8 +94,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			// Запрос авторизации
 			auth, chk := req.Header["Authorization"]
 			if !chk {
-				resp_header := w.Header()
-				resp_header["WWW-Authenticate"] = []string{"Basic"}
+				resp_header[http.CanonicalHeaderKey("WWW-Authenticate")] = []string{"Basic"}
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -123,16 +122,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			} else if login_pass[0] == "petya" {
 				resp_body = []byte("error")
 			} else {
-				resp_header := w.Header()
-				resp_header["Set-Cookie"] = []string{"token=123456"}
-				resp_body = []byte(fake_page)
+				resp_header[http.CanonicalHeaderKey("Set-Cookie")] = []string{"token=123456"}
+				resp_body = []byte("/fake")
 			}
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 	} else if req.Method == "GET" {
-		if url == "/favicon.ico" {
+		if url == "/fake" {
+			req_header := req.Header
+			if cookie, found := req_header[http.CanonicalHeaderKey("Cookie")]; found {
+				for _, p := range cookie {
+					if pos := strings.Index(p, "token="); (pos != -1) && (p[pos+6:] == "123456") {
+						resp_body = []byte(fake_page)
+						break
+					}
+				}
+			}
+
+			if len(resp_body) == 0 {
+				resp_header[http.CanonicalHeaderKey("Location")] = []string{"/"}
+				w.WriteHeader(http.StatusSeeOther)
+				return
+			}
+		} else if url == "/favicon.ico" {
 			// Запросили иконку
 			resp_body = h.favicon
 		} else if url == "/chat" {
@@ -150,12 +164,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 			h.received_messages = nil
 		} else if url == "/" {
-			resp_header := w.Header()
-			if cookie, found := resp_header["Cookie"]; found {
+			req_header := req.Header
+			if cookie, found := req_header[http.CanonicalHeaderKey("Cookie")]; found {
 				for _, p := range cookie {
-					if (strings.Index(p, "token=") == 0) && (p[6:] == "123456") {
-						resp_body = []byte(fake_page)
-						break
+					if pos := strings.Index(p, "token="); (pos != -1) && (p[pos+6:] == "123456") {
+						resp_header[http.CanonicalHeaderKey("Location")] = []string{"/fake"}
+						w.WriteHeader(http.StatusSeeOther)
+						return
 					}
 				}
 			}
@@ -188,7 +203,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			// 	f := "<!DOCTYPE html>\n<html lang=\"ru\">\n<head>\n<meta charset=\"UTF-8\">\n<title>Проверка</title>\n</head>\n<body>\n<h1>Здравствуй, %s</h1>\n</body>\n</html>"
 			// 	resp_body = []byte(fmt.Sprintf(f, string(b)))
 			// } else {
-			// 	resp_header := w.Header()
 			// 	resp_header["WWW-Authenticate"] = []string{"Basic"}
 			// 	w.WriteHeader(http.StatusUnauthorized)
 			// 	return
@@ -208,6 +222,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	resp_header[http.CanonicalHeaderKey("Content-Type")] = []string{content_type}
 	resp_header[http.CanonicalHeaderKey("Content-Length")] = []string{strconv.Itoa(len(resp_body))}
+	resp_header[http.CanonicalHeaderKey("Server")] = []string{"Golang test server"}
+	resp_header[http.CanonicalHeaderKey("qazqwerty")] = []string{"Golang test server"}
 
 	for sz, e := w.Write(resp_body); (e == nil) && (len(resp_body) > 0); sz, e = w.Write(resp_body) {
 		resp_body = resp_body[sz:]
