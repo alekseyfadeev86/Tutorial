@@ -1,5 +1,4 @@
 #!/bin/sh
-BuildDir="Build"
 OutputDir="Output"
 
 PrintHelp()
@@ -28,7 +27,7 @@ PrintHelp()
 }
 if [ $# -eq 0 ]; then
 	PrintHelp
-elif [ $1 == build ]; then
+elif [ $1 = "build" ]; then
 	BuildType=''
 	if [ $# -lt 2 ]; then
 		echo "Build type does not set!"
@@ -49,13 +48,12 @@ elif [ $1 == build ]; then
 	fi
 	
 	mkdir ./$OutputDir
-	CurrentBuildDir=${OutputDir}/${BuildDir}/${BuildType}
+	CurrentBuildDir=${OutputDir}/${BuildType}
 	cmake CMakeLists.txt -B${CurrentBuildDir} -DCMAKE_BUILD_TYPE=${BuildType} -DBUILD_OUTPUT_BIN=${OutputDir}/Bin/${BuildType}
 	
-elif [ $1 == clean ]; then
-	rm -rf ./${BuildDir}
+elif [ $1 = "clean" ]; then
 	rm -rf ./${OutputDir}
-elif [ $1 == help ]; then
+elif [ $1 = "help" ]; then
 	PrintHelp $2
 else
 	echo "Unknown command!"

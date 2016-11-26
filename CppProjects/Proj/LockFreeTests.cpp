@@ -1,14 +1,12 @@
-#define UNITTEST
+#include "Tests.hpp"
+#include "LockFree.hpp"
 
 #include <iostream>
-
 #include <set>
 #include <vector>
 #include <map>
 #include <thread>
 #include <atomic>
-#include <assert.h>
-#include "LockFree.h"
 
 namespace StackTest
 {
@@ -19,55 +17,36 @@ namespace StackTest
 		try
 		{
 			stack.Pop();
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 		catch( const std::out_of_range &exc )
 		{}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 	}
 
 	/// Проверка удаления элементов и соответствия их значений и количества требуемым
 	template <typename StackT>
 	void TestStackRemove( StackT &stack,
-	                      const std::vector<typename StackT::Type> &test_vec )
+						  const std::vector<typename StackT::Type> &test_vec )
 	{
-		typedef typename StackT::Type Type;
 		try
 		{
-			for( size_t t = test_vec.size(); t > 0; --t )
+			size_t t = test_vec.size();
+			for( ; t > 0; --t )
 			{
-				assert( stack.Pop() == test_vec[ t - 1 ] );
+				MY_CHECK_ASSERT( stack.Pop() == test_vec[ t - 1 ] );
 			}
+			MY_CHECK_ASSERT( t == 0 );
 		}
 		catch( ... )
 		{
-			assert( false );
-		}
-	}
-
-	/// Проверка добавления и удаления элементов
-	template <typename StackT>
-	void TestStackAddRemove( StackT &stack,
-	                         const std::vector<typename StackT::Type> &test_vec )
-	{
-		typedef typename StackT::Type Type;
-
-		try
-		{
-			for( Type val : test_vec )
-			{
-				stack.Push( val );
-			}
-		}
-		catch( ... )
-		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 
-		TestStackRemove( stack, test_vec );
+		TestStackEmpty( stack );
 	}
 
 	/// Общие проверки
@@ -78,15 +57,27 @@ namespace StackTest
 
 		StackT stack;
 		TestStackEmpty( stack );
-		TestStackAddRemove( stack, test_vec );
+		try
+		{
+			for( const Type &val : test_vec )
+			{
+				stack.Push( val );
+			}
+		}
+		catch( ... )
+		{
+			MY_CHECK_ASSERT( false );
+		}
+
+		TestStackRemove( stack, test_vec );
 	}
 
 	template <typename T>
-	void TestStackUnsafe( const std::vector<T> &test_vec,
-	                      const std::function<bool( T )> &validator )
+	void TestListUnsafe( const std::vector<T> &test_vec,
+	                     const std::function<bool( T )> &validator )
 	{
 		typename LockFree::ForwardList<T>::Unsafe ul;
-		assert( !ul );
+		MY_CHECK_ASSERT( !ul );
 
 		std::vector<T> vec_to_compare;
 		try
@@ -98,12 +89,12 @@ namespace StackTest
 				{
 					vec_to_compare.push_back( v );
 				}
-				assert( ul );
+				MY_CHECK_ASSERT( ul );
 			}
 		}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 
 		ul.RemoveIf( validator );
@@ -112,27 +103,29 @@ namespace StackTest
 		{
 			for( size_t t = vec_to_compare.size(); t > 0; --t )
 			{
-				assert( ul.Pop() == vec_to_compare[ t - 1 ] );
-				assert( ( bool ) ul == ( t > 1 ) );
+				auto val = ul.Pop();
+				MY_CHECK_ASSERT( !validator( val ) );
+				MY_CHECK_ASSERT( val == vec_to_compare[ t - 1 ] );
+				MY_CHECK_ASSERT( ( bool ) ul == ( t > 1 ) );
 			}
 		}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 
 		TestStackEmpty( ul );
 	}
 
 	template <typename T>
-	void TestStacks( const std::vector<T> &test_vec,
-	                 const std::function<bool( T )> &validator )
+	void TestLists( const std::vector<T> &test_vec,
+	                const std::function<bool( T )> &validator )
 	{
-		std::cout << "-------0------\n";
+//		std::cout << "-------0------\n";
 		CommonStackTest<typename LockFree::ForwardList<T>::Unsafe>( test_vec );
-		std::cout << "-------1------\n";
-		TestStackUnsafe<T>( test_vec, validator );
-		std::cout << "-------2------\n";
+//		std::cout << "-------1------\n";
+		TestListUnsafe<T>( test_vec, validator );
+//		std::cout << "-------2------\n";
 
 		LockFree::ForwardList<T> fl;
 		for( T val : test_vec )
@@ -142,22 +135,22 @@ namespace StackTest
 
 		auto flu1 = fl.Release();
 		auto flu2 = fl.Release();
-		assert( flu1 );
+		MY_CHECK_ASSERT( flu1 );
 		TestStackEmpty( flu2 );
-		std::cout << "-------3------\n";
+//		std::cout << "-------3------\n";
 		TestStackRemove( flu1, test_vec );
-		std::cout << "-------4------\n";
+//		std::cout << "-------4------\n";
 		for( T val : test_vec )
 		{
 			fl.Push( val );
 		}
 		flu1 = fl.Release();
-		std::cout << "-------5------\n";
-		fl.Push( flu1 );
+		fl.Push( std::move( flu1 ) );
 		TestStackEmpty( flu1 );
-		std::cout << "-------6------\n";
+//		std::cout << "-------5------\n";
 		flu1 = fl.Release();
 		TestStackRemove( flu1, test_vec );
+//		std::cout << "-------6------\n";
 	}
 } // namespace StackTest
 
@@ -166,10 +159,29 @@ void forward_list_test()
 	static std::atomic<bool> Checked( false );
 	if( !Checked.exchange( true ) )
 	{
-		const std::vector<LockFree::DebugStruct> test_vec( { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } );
-		StackTest::TestStacks<LockFree::DebugStruct>( test_vec,
-													  []( LockFree::DebugStruct val ) -> bool { return ( val.Val % 2 ) == 0; } );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+		{
+			const std::vector<LockFree::DebugStruct> test_vec( { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 } );
+			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == ( int64_t )test_vec.size() );
+			StackTest::TestLists<LockFree::DebugStruct>( test_vec,
+														 []( LockFree::DebugStruct val ) -> bool { return ( val.Val % 2 ) == 0; } );
+			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == ( int64_t )test_vec.size() );
+
+			{
+				LockFree::ForwardList<LockFree::DebugStruct> fl;
+				for( const auto &iter : test_vec )
+				{
+					fl.Push( iter );
+				}
+				MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == ( int64_t )( 2*test_vec.size() ) );
+			}
+			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == ( int64_t )test_vec.size() );
+		}
+
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	}
+
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	const uint8_t th_num = 10;
 	const uint16_t count = 1000;
@@ -194,9 +206,7 @@ void forward_list_test()
 	auto consumer = [ & ]()
 	{
 		uint16_t t = T++;
-#ifdef _DEBUG
-		assert( t < th_num );
-#endif
+		MY_CHECK_ASSERT( t < th_num );
 		received[ t ].reserve( 2 * count );
 
 		while( true )
@@ -211,7 +221,7 @@ void forward_list_test()
 				break;
 			}
 
-			fl.Push( flu );
+			fl.Push( std::move( flu ) );
 		}
 	};
 
@@ -250,13 +260,13 @@ void forward_list_test()
 		for( uint16_t val : received[ t ] )
 		{
 			auto iter = chk.find( val );
-			assert( iter != chk.end() );
+			MY_CHECK_ASSERT( iter != chk.end() );
 			chk.erase( iter );
 		}
 	}
 
-	assert( chk.empty() );
-	assert( LockFree::DebugStruct::GetCounter() == 0 );
+	MY_CHECK_ASSERT( chk.empty() );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 } // void forward_list_test()
 
 void deferred_deleter_test()
@@ -266,54 +276,73 @@ void deferred_deleter_test()
 	if( !Checked.exchange( true ) )
 	{
 		// Однопоточная проверка
-		DeferredDeleter<LockFree::DebugStruct> def_queue( 1 );
 		const uint16_t MaxCount( 1000 );
+		DeferredDeleter def_queue( 1 );
 
+		// Добавляем MaxCount элементов на удаление,
+		// все элементы должны быть удалены сразу, т.к. все эпохи свободны
 		for( uint16_t t = 0; t < MaxCount; ++t )
 		{
 			def_queue.Delete( new LockFree::DebugStruct( t ) );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
+		// Захватываем эпоху, добавляем элементы на удаление, пробуем удалить
+		// ни одного элемента не должно быть удалено,т.к. эпоха захвачена
 		auto epoch = def_queue.EpochAcquire();
-
 		for( uint16_t t = 0; t < MaxCount; ++t )
 		{
 			def_queue.Delete( new LockFree::DebugStruct( t ) );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == MaxCount );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == MaxCount );
 		def_queue.Clear();
-		assert( LockFree::DebugStruct::GetCounter() == MaxCount );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == MaxCount );
+
+		// Освобождаем эпоху, пробуем очистить очередь - все
+		// элементы должны быть удалены
 		epoch.Release();
 		def_queue.Clear();
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
-		DeferredDeleter<LockFree::DebugStruct> def_queue2( 2 );
+		DeferredDeleter def_queue2( 2 );
 		auto epoch1 = def_queue2.EpochAcquire();
 		for( uint16_t t = 0; t < MaxCount; ++t )
 		{
 			def_queue2.Delete( new LockFree::DebugStruct( t ) );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == MaxCount );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == MaxCount );
 		auto epoch2 = def_queue2.EpochAcquire();
 		for( uint16_t t = 0; t < MaxCount; ++t )
 		{
 			def_queue2.Delete( new LockFree::DebugStruct( t ) );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == 2*MaxCount );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2*MaxCount );
 		epoch1.Release();
 		def_queue2.Clear();
-		assert( LockFree::DebugStruct::GetCounter() == MaxCount );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == MaxCount );
 		epoch2.Release();
 		def_queue2.Clear();
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+
+		{
+			DeferredDeleter def_queue2( 1 );
+			for( uint16_t t = 0; t < MaxCount; ++t )
+			{
+				def_queue2.Delete( new LockFree::DebugStruct( t ) );
+			}
+		}
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	} // if( !Checked.exchange( true ) )
 
 	// Многопоточная проверка
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	const uint8_t threads_count = 10;
-	DeferredDeleter<LockFree::DebugStruct> def_queue( threads_count );
+	DeferredDeleter def_queue( threads_count );
 	std::atomic<int64_t> counter( 0 );
 	std::atomic<bool> run( false );
+
+	// Пробуем захватывать/отпускать эпохи из разных потоков (всего 2*threads_count потоков)
+	// в любой момент количество захваченных эпох не должно превышать threads_count
 	auto epoch_catcher = [ &counter, threads_count, &def_queue, &run ]()
 	{
 		try
@@ -324,14 +353,14 @@ void deferred_deleter_test()
 			}
 
 			auto ep_keeper = def_queue.EpochAcquire();
-			assert( ++counter <= threads_count );
+			MY_CHECK_ASSERT( ++counter <= threads_count );
 			std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
-			assert( --counter < threads_count );
+			MY_CHECK_ASSERT( --counter < threads_count );
 			ep_keeper.Release();
 		}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 	};
 
@@ -348,9 +377,12 @@ void deferred_deleter_test()
 	{
 		th.join();
 	}
+	MY_CHECK_ASSERT( counter.load() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	run.store( false );
-	auto handler = [ &def_queue, &run ]()
+	std::atomic<int64_t> threads_work( 0 );
+	auto handler = [ &def_queue, &run, &threads_work ]()
 	{
 		while( !run.load() )
 		{
@@ -372,9 +404,14 @@ void deferred_deleter_test()
 		}
 
 		def_queue.Clear();
+		if( --threads_work == 0 )
+		{
+			def_queue.Clear();
+		}
 	};
 
 	th_vec.clear();
+	threads_work.store( threads_count );
 	for( auto t = 0; t < threads_count; ++t )
 	{
 		th_vec.push_back( std::thread( handler ) );
@@ -386,7 +423,7 @@ void deferred_deleter_test()
 	{
 		th.join();
 	}
-	assert( LockFree::DebugStruct::GetCounter() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 } // void deferred_deleter_test()
 
 void test_stack_empty( LockFree::Stack<LockFree::DebugStruct> &stack )
@@ -395,15 +432,15 @@ void test_stack_empty( LockFree::Stack<LockFree::DebugStruct> &stack )
 	{
 		LockFree::DebugStruct test_elem( -123 );
 		auto elem = stack.Pop( &test_elem );
-		assert( elem.Val == test_elem.Val );
+		MY_CHECK_ASSERT( elem.Val == test_elem.Val );
 		auto elem2 = stack.Pop();
-		assert( false );
+		MY_CHECK_ASSERT( false );
 	}
 	catch( const std::out_of_range& )
 	{}
 	catch( ... )
 	{
-		assert( false );
+		MY_CHECK_ASSERT( false );
 	}
 }
 
@@ -419,35 +456,36 @@ void stack_test()
 
 		stack.Push( 1 );
 		stack.Push( LockFree::DebugStruct( 2 ) );
-		assert( LockFree::DebugStruct::GetCounter() == 2 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 
 		try
 		{
 			bool is_empty = true;
 			auto elem1 = stack.Pop( nullptr, &is_empty );
-			assert( elem1.Val == 2 );
-			assert( !is_empty );
+			MY_CHECK_ASSERT( elem1.Val == 2 );
+			MY_CHECK_ASSERT( !is_empty );
 			auto elem2 = stack.Pop( nullptr, &is_empty );
-			assert( elem2.Val == 1 );
-			assert( is_empty );
+			MY_CHECK_ASSERT( elem2.Val == 1 );
+			MY_CHECK_ASSERT( is_empty );
 			test_stack_empty( stack );
 		}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
 		}
 
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
 			Stack<LockFree::DebugStruct> stack2( 1 );
 			stack2.Push( 1 );
 			stack2.Push( LockFree::DebugStruct( 2 ) );
-			assert( LockFree::DebugStruct::GetCounter() == 2 );
+			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	}
 
 	// Многопоточная проверка
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	static const uint8_t ThreadsNum( 10 );
 	static const uint16_t OneThreadOpsNum( 10 );
 	Stack<LockFree::DebugStruct> stack( ThreadsNum );
@@ -456,9 +494,10 @@ void stack_test()
 
 	auto h = [ & ]()
 	{
-		uint8_t n = N++;
-		assert( n < ThreadsNum );
-		readed_values[ n ].reserve( OneThreadOpsNum );
+		const uint8_t n = N++;
+		MY_CHECK_ASSERT( n < ThreadsNum );
+		std::vector<uint16_t> &vec_ref = readed_values[ n ];
+		vec_ref.reserve( OneThreadOpsNum );
 		bool is_ready( false );
 
 		try
@@ -475,7 +514,7 @@ void stack_test()
 					auto val = stack.Pop( &Fake );
 					if( val.Val != Fake.Val )
 					{
-						readed_values[ n ].push_back( val.Val );
+						vec_ref.push_back( val.Val );
 					}
 				}
 			}
@@ -485,13 +524,14 @@ void stack_test()
 			while( 1 )
 			{
 				auto val = stack.Pop();
-				assert( val.Val >= 0 );
-				readed_values[ n ].push_back( val.Val );
+				MY_CHECK_ASSERT( val.Val >= 0 );
+				MY_CHECK_ASSERT( val.Val <= 0xFFFF );
+				vec_ref.push_back( val.Val );
 			}
 		}
 		catch( ... )
 		{
-			assert( is_ready );
+			MY_CHECK_ASSERT( is_ready );
 		}
 	};
 
@@ -505,7 +545,7 @@ void stack_test()
 	{
 		th.join();
 	}
-	assert( LockFree::DebugStruct::GetCounter() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	std::map<uint16_t, uint8_t> m;
 	for( auto &vec : readed_values )
@@ -520,15 +560,18 @@ void stack_test()
 		}
 	}
 
+	const auto end = m.end();
 	for( uint16_t t = 0; t < OneThreadOpsNum; ++t )
 	{
 		auto iter = m.find( 2*t );
-		assert( iter != m.end() );
-		assert( iter->second == ThreadsNum );
+		MY_CHECK_ASSERT( iter != end );
+		MY_CHECK_ASSERT( iter->second == ThreadsNum );
 	}
 
+	// Проверяем возвращаемое значение Push-а (был ли стек пуст до добавления)
 	std::atomic<bool> run( false );
 	std::atomic<int64_t> counter( 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	auto h2 = [ & ]()
 	{
 		while( !run.load() )
@@ -552,10 +595,13 @@ void stack_test()
 		th.join();
 	}
 
-	assert( counter.load() == 1 );
+	MY_CHECK_ASSERT( counter.load() == 1 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == ( int64_t ) threads.size() );
 
+	// Проверяем возвращаемое значение Pop-а (был ли удалён последний элемент)
 	run.store( false );
 	counter.store( 0 );
+	std::atomic<int64_t> threads_work( 0 );
 	auto h3 = [ & ]()
 	{
 		while( !run.load() )
@@ -572,10 +618,25 @@ void stack_test()
 		}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
+		}
+
+		if( --threads_work == 0 )
+		{
+			try
+			{
+				stack.Pop();
+			}
+			catch( const std::out_of_range& )
+			{}
+			catch( ... )
+			{
+				MY_CHECK_ASSERT( false );
+			}
 		}
 	};
 
+	threads_work.store( threads.size() );
 	for( auto &th : threads )
 	{
 		th = std::thread( h3 );
@@ -588,10 +649,13 @@ void stack_test()
 		th.join();
 	}
 
-	assert( counter.load() == 1 );
+	MY_CHECK_ASSERT( counter.load() == 1 );
+	MY_ASSERT( threads_work.load() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	run.store( false );
 	counter.store( 0 );
+	threads_work.store( 0 );
 	auto h4 = [ & ]()
 	{
 		while( !run.load() )
@@ -622,10 +686,28 @@ void stack_test()
 		{}
 		catch( ... )
 		{
-			assert( false );
+			MY_CHECK_ASSERT( false );
+		}
+
+		if( --threads_work == 0 )
+		{
+			try
+			{
+				while( true )
+				{
+					stack.Pop();
+				}
+			}
+			catch( const std::out_of_range& )
+			{}
+			catch( ... )
+			{
+				MY_CHECK_ASSERT( false );
+			}
 		}
 	};
 
+	threads_work.store( threads.size() );
 	for( auto &th : threads )
 	{
 		th = std::thread( h4 );
@@ -637,8 +719,10 @@ void stack_test()
 	{
 		th.join();
 	}
-
-	assert( counter.load() == 0 );
+	
+	MY_ASSERT( threads_work.load() == 0 );
+	MY_CHECK_ASSERT( counter.load() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 } // void stack_test()
 
 void queue_test()
@@ -650,34 +734,35 @@ void queue_test()
 		// Однопоточная проверка
 		Queue<LockFree::DebugStruct> queue( 1 );
 		auto elem_ptr = queue.Pop();
-		assert( !elem_ptr );
+		MY_CHECK_ASSERT( !elem_ptr );
 
 		queue.Push( 1 );
 		queue.Push( LockFree::DebugStruct( 2 ) );
-		assert( LockFree::DebugStruct::GetCounter() == 2 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 
 		{
 			auto elem_ptr1 = queue.Pop();
-			assert( elem_ptr1 );
-			assert( elem_ptr1.Get()->Val == 1 );
+			MY_CHECK_ASSERT( elem_ptr1 );
+			MY_CHECK_ASSERT( elem_ptr1.get()->Val == 1 );
 			auto elem_ptr2 = queue.Pop();
-			assert( elem_ptr2 );
-			assert( elem_ptr2.Get()->Val == 2 );
+			MY_CHECK_ASSERT( elem_ptr2 );
+			MY_CHECK_ASSERT( elem_ptr2.get()->Val == 2 );
 			auto elem_ptr3 = queue.Pop();
-			assert( !elem_ptr3 );
+			MY_CHECK_ASSERT( !elem_ptr3 );
 		}
 
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
 			Queue<LockFree::DebugStruct> queue2( 1 );
 			queue2.Push( 1 );
 			queue2.Push( LockFree::DebugStruct( 2 ) );
-			assert( LockFree::DebugStruct::GetCounter() == 2 );
+			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 		}
-		assert( LockFree::DebugStruct::GetCounter() == 0 );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	}
 
 	// Многопоточная проверка
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	static const uint8_t ThreadsNum( 10 );
 	static const uint16_t OneThreadOpsNum( 10 );
 	Queue<LockFree::DebugStruct> queue( ThreadsNum );
@@ -687,8 +772,9 @@ void queue_test()
 	auto h = [ & ]()
 	{
 		uint8_t n = N++;
-		assert( n < ThreadsNum );
-		readed_values[ n ].reserve( OneThreadOpsNum );
+		MY_CHECK_ASSERT( n < ThreadsNum );
+		std::vector<uint16_t> &vec_ref = readed_values[ n ];
+		vec_ref.reserve( OneThreadOpsNum );
 
 		for( uint16_t t = 0; t < 2*OneThreadOpsNum; ++t )
 		{
@@ -701,7 +787,9 @@ void queue_test()
 				auto val = queue.Pop();
 				if( val )
 				{
-					readed_values[ n ].push_back( val.Get()->Val );
+					MY_CHECK_ASSERT( val.get()->Val >= 0 );
+					MY_CHECK_ASSERT( val.get()->Val <= 0xFFFF );
+					vec_ref.push_back( val.get()->Val );
 				}
 			}
 		}
@@ -714,8 +802,9 @@ void queue_test()
 				break;
 			}
 
-			assert( val.Get()->Val >= 0 );
-			readed_values[ n ].push_back( val.Get()->Val );
+			MY_CHECK_ASSERT( val.get()->Val >= 0 );
+			MY_CHECK_ASSERT( val.get()->Val <= 0xFFFF );
+			vec_ref.push_back( val.get()->Val );
 		}
 	};
 
@@ -729,7 +818,7 @@ void queue_test()
 	{
 		th.join();
 	}
-	assert( LockFree::DebugStruct::GetCounter() == 0 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	std::map<uint16_t, uint8_t> m;
 	for( auto &vec : readed_values )
@@ -744,11 +833,12 @@ void queue_test()
 		}
 	}
 
+	const auto end = m.end();
 	for( uint16_t t = 0; t < OneThreadOpsNum; ++t )
 	{
 		auto iter = m.find( 2*t );
-		assert( iter != m.end() );
-		assert( iter->second == ThreadsNum );
+		MY_CHECK_ASSERT( iter != end );
+		MY_CHECK_ASSERT( iter->second == ThreadsNum );
 	}
 } // void queue_test()
 
@@ -766,36 +856,43 @@ void lockfree_test()
 		std::cout << exc.what() << std::endl;
 	}
 }
- 
-int main()
+
+void lock_free_tests()
 {
 	// Проверка контейнеров
 #ifdef _WIN32
-	printf( "Press enter to begin\n" );
+	printf( "Lockfree containers testing\n" );
+//	printf( "Press enter to begin\n" );
 #else
-	printf( "Нажмите enter, чтобы начать\n" );
+	printf( "Проверка неблокирующих контейнеров\n" );
+//	printf( "Нажмите enter, чтобы начать\n" );
 #endif
 	fflush( stdout );
-	getchar();
+//	getchar();
 
-	for( uint16_t t = 0; t < 1000; ++t )
+	//for( uint16_t t = 0; t < 1000; ++t )
+	for( uint16_t t = 0; t < 5; ++t )
 	{
+		if( 1)//( t % 10 ) == 0 )
+		{
 #ifdef _WIN32
-		printf( "Multithread debug, step %i\n", t + 1 );
+			printf( "Multithread debug, step %i\n", t + 1 );
 #else
-		printf( "Многопоточная отладка, шаг %i\n", t + 1 );
+			printf( "Многопоточная отладка, шаг %i\n", t + 1 );
 #endif
-		fflush( stdout );
+			fflush( stdout );
+		}
 		lockfree_test();
 		std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
 	}
 
 #ifdef _WIN32
-	printf( "Ready.Press enter to finish\n" );
+	printf( "Lockfree test finished\n" );
+//	printf( "Lockfree test finished.Press enter to finish\n" );
 #else
-	printf( "Готово.Нажмите enter, чтобы закончить\n" );
+	printf( "Готово\n" );
+//	printf( "Готово.Нажмите enter, чтобы закончить\n" );
 #endif
 	fflush( stdout );
-	getchar();
-	return 0;
+//	getchar();
 }

@@ -1,5 +1,4 @@
 #!/bin/sh
-BuildDir="Build"
 OutputDir="Output"
 
 PrintHelp()
@@ -21,7 +20,7 @@ PrintHelp()
 				echo "Shows the help"
 				;;
 			*)
-				echo "This function is not exist"
+				echo "This function does not exist"
 				;;
 		esac
 	fi
@@ -49,11 +48,11 @@ elif [ $1 = "build" ]; then
 	fi
 	
 	mkdir ./$OutputDir
-	CurrentBuildDir=${OutputDir}/${BuildDir}/${BuildType}
-	cmake CMakeLists.txt -B${CurrentBuildDir} -DCMAKE_BUILD_TYPE=${BuildType} -DBUILD_OUTPUT_BIN=${OutputDir}/Bin/${BuildType}
+	CurrentBuildDir=${OutputDir}/${BuildType}
+	#cmake CMakeLists.txt -B${CurrentBuildDir} -DCMAKE_BUILD_TYPE=${BuildType} -DBUILD_OUTPUT_BIN=${OutputDir}/Bin/${BuildType}
+	cmake CMakeLists.txt -B${CurrentBuildDir} -DCMAKE_BUILD_TYPE=${BuildType}
 	
 elif [ $1 = "clean" ]; then
-	rm -rf ./${BuildDir}
 	rm -rf ./${OutputDir}
 elif [ $1 = "help" ]; then
 	PrintHelp $2
