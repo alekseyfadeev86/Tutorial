@@ -18,7 +18,7 @@ const (
 <head>
 	<meta charset="utf-8">
 	<title>Просто страница</title>
-    <link rel="icon" href="favicon.ico" type="image/x-icon">
+	<link rel="icon" href="favicon.ico" type="image/x-icon">
 </head>
 <body onload="alert(проверка)">
 	<p>Просто страница-заплатка, которая в дальнейшем будет заменена на что-то другое</p>
