@@ -131,10 +131,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	} else if req.Method == "GET" {
 		if url == "/fake" {
+			// Запросили фиктивную страницу - используется для отладки механизма авторизации
 			req_header := req.Header
 			if cookie, found := req_header[http.CanonicalHeaderKey("Cookie")]; found {
+				// В запросе присутствую куки - проверяем, авторизован ли пользователь
 				for _, p := range cookie {
 					if pos := strings.Index(p, "token="); (pos != -1) && (p[pos+6:] == "123456") {
+						// Авторизован - возвращаем фиктивную страницу
 						resp_body = []byte(fake_page)
 						break
 					}
@@ -142,6 +145,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 
 			if len(resp_body) == 0 {
+				// Пользователь не авторизован - перекидываем на заглавную страницу
 				resp_header[http.CanonicalHeaderKey("Location")] = []string{"/"}
 				w.WriteHeader(http.StatusSeeOther)
 				return
@@ -164,10 +168,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 			h.received_messages = nil
 		} else if url == "/" {
+			// Запросили главную страницу
 			req_header := req.Header
+
+			// Проверяем, авторизовался ли пользователь
 			if cookie, found := req_header[http.CanonicalHeaderKey("Cookie")]; found {
+				// В запросе есть куки
 				for _, p := range cookie {
 					if pos := strings.Index(p, "token="); (pos != -1) && (p[pos+6:] == "123456") {
+						// Пользователь авторизован - перекидываем его на фиктивную страницу
+						// (позднее этот кусок будет заменён)
 						resp_header[http.CanonicalHeaderKey("Location")] = []string{"/fake"}
 						w.WriteHeader(http.StatusSeeOther)
 						return
@@ -176,9 +186,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			}
 
 			if len(resp_body) == 0 {
+				// Пользователь не авторизован - перекидываем его на страницу авторизации
 				var err error
 				resp_body, err = read_file("./FrontEndPrototype/auth.html", 4*1024)
 				if err != nil {
+					// Косяк чтения файла
 					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
