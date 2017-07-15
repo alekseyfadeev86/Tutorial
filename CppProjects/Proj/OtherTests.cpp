@@ -6,6 +6,14 @@
 #include <atomic>
 #include <vector>
 
+#ifdef NDEBUG
+	#undef NDEBUG
+	#include <assert.h>
+	#define NDEBUG
+#else
+	#include <assert.h>
+#endif
+
 using namespace Bicycle;
 
 void errors_test()

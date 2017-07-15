@@ -1,10 +1,18 @@
 #include "Tests.hpp"
 #include "CoroService.hpp"
-#include "CoroInet.hpp"
+#include "CoroSrv/Inet.hpp"
 
 #include <stdio.h>
 #include <string>
 #include <set>
+
+#ifdef NDEBUG
+	#undef NDEBUG
+	#include <assert.h>
+	#define NDEBUG
+#else
+	#include <assert.h>
+#endif
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -649,9 +657,315 @@ void check_tcp( bool single_thread )
 	MY_CHECK_ASSERT( srv.Stop() );
 } // void check_tcp( bool single_thread )
 
+void check_sync( bool single_thread )
+{
+	std::atomic<int64_t> total_unique_locks( 0 );
+	std::atomic<int64_t> unique_locks_counter( 0 );
+
+	std::atomic<int64_t> total_sh_unique_locks( 0 );
+	std::atomic<int64_t> total_sh_shared_locks( 0 );
+	std::atomic<int64_t> sh_unique_locks_counter( 0 );
+	std::atomic<int64_t> sh_shared_locks_counter( 0 );
+
+	std::atomic<int64_t> semaphore_counter( 0 );
+
+	std::atomic<int64_t> ev_waiters_num( 0 );
+
+	auto task = [ & ]()
+	{
+		std::shared_ptr<Mutex> mut_ptr( new Mutex );
+		MY_CHECK_ASSERT( mut_ptr );
+
+		for( uint8_t t = 0; t < 10; ++t )
+		{
+			auto err = Go( [ &, mut_ptr ]()
+			{
+				for( uint8_t i = 0; i < 10; ++i )
+				{
+					MY_CHECK_ASSERT( unique_locks_counter.load() <= 1 );
+					mut_ptr->Lock();
+
+					++unique_locks_counter;
+					MY_CHECK_ASSERT( unique_locks_counter.load() == 1 );
+					++total_unique_locks;
+
+					std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+
+					--unique_locks_counter;
+					MY_CHECK_ASSERT( unique_locks_counter.load() == 0 );
+
+					mut_ptr->Unlock();
+					MY_CHECK_ASSERT( unique_locks_counter.load() <= 1 );
+				}
+			});
+			MY_CHECK_ASSERT( !err );
+		}
+		mut_ptr.reset();
+
+		std::shared_ptr<SharedMutex> sh_mut_ptr( new SharedMutex );
+		MY_CHECK_ASSERT( sh_mut_ptr );
+		for( uint8_t t = 0; t < 10; ++t )
+		{
+			auto err = Go( [ &, sh_mut_ptr ]()
+			{
+				for( uint8_t i = 0; i < 10; ++i )
+				{
+					if( ( i % 2 ) == 0 )
+					{
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() <= 1 );
+						sh_mut_ptr->Lock();
+
+						++sh_unique_locks_counter;
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() == 1 );
+						MY_CHECK_ASSERT( sh_shared_locks_counter.load() == 0 );
+						++total_sh_unique_locks;
+
+						std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+
+						--sh_unique_locks_counter;
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() == 0 );
+						MY_CHECK_ASSERT( sh_shared_locks_counter.load() == 0 );
+
+						sh_mut_ptr->Unlock();
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() <= 1 );
+					}
+					else
+					{
+						sh_mut_ptr->SharedLock();
+						++sh_shared_locks_counter;
+
+						++total_sh_shared_locks;
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() == 0 );
+						MY_CHECK_ASSERT( sh_shared_locks_counter.load() > 0 );
+
+						std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+
+						--sh_shared_locks_counter;
+						MY_CHECK_ASSERT( sh_unique_locks_counter.load() == 0 );
+						MY_CHECK_ASSERT( sh_shared_locks_counter.load() >= 0 );
+						sh_mut_ptr->Unlock();
+					}
+				}
+			});
+			MY_CHECK_ASSERT( !err );
+		}
+		sh_mut_ptr.reset();
+
+		std::shared_ptr<Semaphore> sem_ptr( new Semaphore );
+		MY_CHECK_ASSERT( sem_ptr );
+		for( uint8_t t = 0; t < 10; ++t )
+		{
+			auto err = Go( [ &, sem_ptr ]()
+			{
+				MY_CHECK_ASSERT( sem_ptr );
+				for( uint8_t i = 0; i < 10; ++i )
+				{
+					if( ( i % 2 ) == 0 )
+					{
+						MY_CHECK_ASSERT( semaphore_counter.load() >= 0 );
+						std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+						sem_ptr->Push();
+						++semaphore_counter;
+						MY_CHECK_ASSERT( semaphore_counter.load() > 0 );
+					}
+					else
+					{
+						MY_CHECK_ASSERT( semaphore_counter.load() > 0 );
+						sem_ptr->Pop();
+						--semaphore_counter;
+						MY_CHECK_ASSERT( semaphore_counter.load() >= 0 );
+					}
+				}
+			});
+			MY_CHECK_ASSERT( !err );
+		}
+		sem_ptr.reset();
+
+		std::shared_ptr<Event> ev_ptr( new Event );
+		MY_CHECK_ASSERT( ev_ptr );
+
+		for( uint8_t step = 0; step < 2; ++step )
+		{
+			for( uint8_t t = 0; t < 10; ++t )
+			{
+				auto err = Go( [ &, ev_ptr ]()
+				{
+					MY_CHECK_ASSERT( ev_ptr );
+					++ev_waiters_num;
+					MY_CHECK_ASSERT( ev_waiters_num.load() > 0 );
+					ev_ptr->Wait();
+					--ev_waiters_num;
+					MY_CHECK_ASSERT( ev_waiters_num.load() >= 0 );
+				});
+				MY_CHECK_ASSERT( !err );
+			}
+
+			while( ev_waiters_num.load() < 10 )
+			{
+				YieldCoro();
+			}
+
+			ev_ptr->Set();
+
+			while( ev_waiters_num.load() > 0 )
+			{
+				YieldCoro();
+			}
+			MY_CHECK_ASSERT( ev_waiters_num.load() == 0 );
+
+			ev_ptr->Reset();
+		} // for( uint8_t step = 0; step < 2; ++step )
+
+	}; //auto task
+
+	Service srv;
+	MY_CHECK_ASSERT( srv.Restart() );
+	Error err = srv.AddCoro( task );
+	MY_CHECK_ASSERT( !err );
+
+	const uint8_t threads_num = single_thread ? 1 : 4;
+	std::vector<std::thread> threads( threads_num );
+	MY_CHECK_ASSERT( threads.size() == threads_num );
+	std::function<void()> thread_task = [ &srv ]
+	{
+		try
+		{
+			srv.Run();
+		}
+		catch( ... )
+		{
+			MY_CHECK_ASSERT( false );
+		}
+	};
+
+	for( auto &th : threads )
+	{
+		th = std::thread( thread_task );
+	}
+
+	for( auto &th : threads )
+	{
+		th.join();
+	}
+
+	MY_CHECK_ASSERT( srv.Stop() );
+
+	MY_CHECK_ASSERT( unique_locks_counter.load() == 0 );
+	MY_CHECK_ASSERT( total_unique_locks.load() > 10 );
+	
+	MY_CHECK_ASSERT( total_sh_unique_locks.load() > 10 );
+	MY_CHECK_ASSERT( total_sh_shared_locks.load() > 10 );
+	MY_CHECK_ASSERT( sh_unique_locks_counter.load() == 0 );
+	MY_CHECK_ASSERT( sh_shared_locks_counter.load() == 0 );
+
+	MY_CHECK_ASSERT( semaphore_counter.load() == 0 );
+} // void check_sync()
+
+void check_timer( bool single_thread )
+{
+	Service srv;
+	MY_CHECK_ASSERT( srv.Restart() );
+	Error err = srv.AddCoro( []()
+	{
+		std::shared_ptr<Timer> timer_ptr( new Timer );
+		MY_CHECK_ASSERT( timer_ptr );
+		Timer &timer = *timer_ptr;
+		Error err;
+
+		timer.Wait( err );
+		MY_CHECK_ASSERT( err );
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerExpired );
+
+		timer.ExpiresAfter( 100*1000, err );
+		MY_CHECK_ASSERT( !err );
+
+		timer.ExpiresAfter( 1000*1000, err );
+		MY_CHECK_ASSERT( err );
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerNotExpired );
+
+		timer.Wait( err );
+		MY_CHECK_ASSERT( !err );
+
+		timer.Wait( err );
+		MY_CHECK_ASSERT( err );
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerExpired );
+
+		timer.ExpiresAfter( 1000*1000, err );
+		MY_CHECK_ASSERT( !err );
+		for( uint8_t t = 0; t < 10; ++t )
+		{
+			err = Go( [ timer_ptr ]()
+			{
+				MY_ASSERT( timer_ptr );
+				Error err;
+				timer_ptr->Wait( err );
+				MY_CHECK_ASSERT( !err );
+			});
+		}
+		timer.Wait( err );
+		MY_CHECK_ASSERT( !err );
+
+		timer.ExpiresAfter( 1000*1000*1000, err );
+		MY_CHECK_ASSERT( !err );
+		std::shared_ptr<std::atomic<uint8_t>> count_ptr( new std::atomic<uint8_t>( 0 ) );
+		const uint8_t number = 10;
+		for( uint8_t t = 0; t < number; ++t )
+		{
+			err = Go( [ timer_ptr, count_ptr, number ]()
+			{
+				MY_ASSERT( timer_ptr );
+				MY_ASSERT( count_ptr );
+
+				Error err;
+				uint8_t val = ++( *count_ptr );
+				if( val == number )
+				{
+					std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
+					timer_ptr->Cancel( err );
+					MY_CHECK_ASSERT( !err );
+				}
+				else
+				{
+					timer_ptr->Wait( err );
+					MY_CHECK_ASSERT( err );
+					MY_CHECK_ASSERT( err.Code == ErrorCodes::OperationAborted );
+				}
+			});
+		}
+	} ); // Error err = srv.AddCoro
+	MY_CHECK_ASSERT( !err );
+
+	const uint8_t threads_num = single_thread ? 1 : 4;
+	std::vector<std::thread> threads( threads_num );
+	MY_CHECK_ASSERT( threads.size() == threads_num );
+	std::function<void()> thread_task = [ &srv ]
+	{
+		try
+		{
+			srv.Run();
+		}
+		catch( ... )
+		{
+			MY_CHECK_ASSERT( false );
+		}
+	};
+
+	for( auto &th : threads )
+	{
+		th = std::thread( thread_task );
+	}
+
+	for( auto &th : threads )
+	{
+		th.join();
+	}
+
+	MY_CHECK_ASSERT( srv.Stop() );
+} // void check_timer( bool single_thread )
+
 void coro_service_tests()
 {
-	const uint16_t steps_num = 0x100;
+	const uint16_t steps_num = 100;
 	for( uint16_t t = 1; t <= steps_num; ++t )
 	{
 #ifdef _DEBUG
@@ -666,5 +980,9 @@ void coro_service_tests()
 		check_udp_sock( true );
 		check_tcp( false );
 		check_tcp( true );
+		check_sync( true );
+		check_sync( false );
+		check_timer( true );
+		check_timer( false );
 	}
 }

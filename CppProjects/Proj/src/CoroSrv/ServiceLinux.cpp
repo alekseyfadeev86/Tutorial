@@ -66,30 +66,29 @@ namespace Bicycle
 			}
 		}
 
-		Error Service::Post( const std::function<void ()> &task )
+		void Service::Post( const std::function<void ()> &task )
 		{
 			LockGuard<SpinLock> lock( TasksMutex );
+			bool need_to_write = PostedTasks.empty();
 			PostedTasks.push_back( task );
-			char c = 123;
+			if( !need_to_write )
+			{
+				// Записываем 1 байт только, если очередь была пуста
+				return;
+			}
 
-			Error err;
+			char c = 123;
+			int res = -1;
+
 			do
 			{
-				if( write( PostPipe[ 1 ], &c, 1 ) != 1 )
-				{
-					err = GetLastSystemError();
-				}
+				res = write( PostPipe[ 1 ], &c, 1 );
+				MY_ASSERT( res <= 1 );
+				MY_ASSERT( res != 0 );
+				MY_ASSERT( ( res != -1 ) || ( errno == EINTR ) ); // Прервано сигналом
 			}
-			while( err.Code == EINTR );
-
-			if( err )
-			{
-				// Ошибка
-				PostedTasks.pop_back();
-			}
-
-			return err;
-		} // Error Service::Post( const std::function<void ()> task )
+			while( res < 1 );
+		} // void Service::Post( const std::function<void ()> task )
 
 		void Service::Execute()
 		{
@@ -123,43 +122,39 @@ namespace Bicycle
 				if( ev_data.data.u64 == 0 )
 				{
 					// Событие на PostPipe[ 0 ]
-					char c = 0;
-					int res = read( PostPipe[ 0 ], &c, 1 );
-					MY_ASSERT( res != 0 );
-
-					if( res == -1 )
-					{
-						Error err = GetLastSystemError();
-						if( ( err.Code == EAGAIN ) || ( err.Code == EINTR ) )
-						{
-							// Нечего считывать
-							continue;
-						}
-						else
-						{
-							// Ошибка
-							MY_ASSERT( false );
-							ThrowIfNeed( err );
-						}
-					}
-
-					MY_ASSERT( c == 123 );
-
 					std::function<void()> task;
 					{
 						LockGuard<SpinLock> lock( TasksMutex );
 						if( PostedTasks.empty() )
 						{
-							MY_ASSERT( false );
+							// Задач нет
 							continue;
 						}
 
 						task = std::move( PostedTasks.front() );
 						PostedTasks.pop_front();
+
+						if( PostedTasks.empty() )
+						{
+							// Была извлечена последняя задача - считываем байт
+							char c = 0;
+							do
+							{
+								int res = read( PostPipe[ 0 ], &c, 1 );
+								MY_ASSERT( res <= 1 );
+								MY_ASSERT( res != 0 );
+								MY_ASSERT( ( res != -1 ) || ( ( c = ( char ) errno ) == EINTR ) ); // Прервано сигналом
+							}
+							while( res < 1 );
+
+							MY_ASSERT( c == 123 );
+						} // if( PostedTasks.empty() )
 					}
 
+					// Обрабатываем задачу
 					if( task )
 					{
+						// Задача не "пустая" - выполняем
 						task();
 					}
 					else
@@ -167,7 +162,7 @@ namespace Bicycle
 						// Была извлечена "пустая" задача - означает завершение цикла
 						// Добавляем задачу снова, чтобы другие потоки тоже получили
 						// уведомление о необходимости завершить работу
-						ThrowIfNeed( Post( task ) );
+						Post( task );
 						return;
 					}
 				} // if( ev_data.data.ptr == nullptr )
@@ -222,19 +217,11 @@ namespace Bicycle
 						ptr = waiters.Pop();
 						MY_ASSERT( ptr != nullptr );
 						ptr->LastEpollEvents = ev_data.events;
-						auto err = Post( [ ptr ]()
+						Post( [ ptr ]()
 						{
 							bool res = ptr->CoroRef.SwitchTo();
 							MY_ASSERT( res );
 						});
-
-						if( err )
-						{
-							// Ошибка выполнения Post-а: переходим в сопрограмму отсюда
-							MY_ASSERT( false );
-							bool res = ptr->CoroRef.SwitchTo();
-							MY_ASSERT( res );
-						}
 					} // while( waiters )
 #ifdef _DEBUG
 					}
@@ -392,7 +379,8 @@ namespace Bicycle
 					while( err.Code == EINTR );
 				}
 
-				if( err.Code != EAGAIN )
+				if( ( err.Code != EAGAIN ) &&
+				    ( err.Code != EWOULDBLOCK ) )
 				{
 					// Операция завершена (успешно или нет - другой вопрос)
 					break;
@@ -617,30 +605,11 @@ namespace Bicycle
 					ptr = waiters.Pop();
 					MY_ASSERT( ptr != nullptr );
 					ptr->WasCancelled = true;
-					Error e = PostToSrv( [ ptr ]()
+					PostToSrv( [ ptr ]()
 					{
 						bool res = ptr->CoroRef.SwitchTo();
 						MY_ASSERT( res );
 					});
-
-					if( e )
-					{
-						MY_ASSERT( false );
-						Coroutine *cur_coro_ptr = GetCurrentCoro();
-						MY_ASSERT( cur_coro_ptr != nullptr );
-
-						std::function<void()> task = [ & ]
-						{
-							// Переходим из основной сопрограммы в ожидающую
-							// завершения операции ввода-вывода
-							bool res = ptr->CoroRef.SwitchTo();
-							MY_ASSERT( res );
-
-							// Возвращаемся в сопрограмму, вызвавшую Close
-							res = cur_coro_ptr->SwitchTo();
-							MY_ASSERT( res );
-						};
-					}
 				} // while( waiters )
 			} // for( auto &waiters : coro_queues )
 		} // void BasicDescriptor::Close( Error &err )
@@ -686,7 +655,6 @@ namespace Bicycle
 			} // LockGuard<SharedSpinLock> lock( desc_data->Lock );
 
 			EpWaitStruct *ptr = nullptr;
-			Error e;
 			for( auto &waiters : coro_queues )
 			{
 				while( waiters && !err )
@@ -694,35 +662,11 @@ namespace Bicycle
 					ptr = waiters.Pop();
 					MY_ASSERT( ptr != nullptr );
 					ptr->WasCancelled = true;
-					e = PostToSrv( [ ptr ]()
+					PostToSrv( [ ptr ]()
 					{
 						bool res = ptr->CoroRef.SwitchTo();
 						MY_ASSERT( res );
 					});
-
-					if( e )
-					{
-						if( !err )
-						{
-							err = std::move( e );
-						}
-
-						MY_ASSERT( false );
-						Coroutine *cur_coro_ptr = GetCurrentCoro();
-						MY_ASSERT( cur_coro_ptr != nullptr );
-
-						std::function<void()> task = [ & ]
-						{
-							// Переходим из основной сопрограммы в ожидающую
-							// завершения операции ввода-вывода
-							bool res = ptr->CoroRef.SwitchTo();
-							MY_ASSERT( res );
-
-							// Возвращаемся в сопрограмму, вызвавшую Cancel
-							res = cur_coro_ptr->SwitchTo();
-							MY_ASSERT( res );
-						};
-					}
 				} // while( waiters )
 			} // for( auto &waiters : coro_queues )
 		} // void BasicDescriptor::Cancel( Error &err )

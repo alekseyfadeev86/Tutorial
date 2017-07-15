@@ -1,5 +1,5 @@
 ﻿#include <Ws2tcpip.h>
-#include "CoroService.hpp"
+#include "CoroSrv/Service.hpp"
 
 namespace Bicycle
 {
@@ -22,18 +22,15 @@ namespace Bicycle
 			CloseHandle( Iocp );
 		}
 
-		Error Service::Post( const std::function<void()> &task )
+		void Service::Post( const std::function<void()> &task )
 		{
 			LockGuard<SpinLock> lock( TasksMutex );
 			PostedTasks.push_back( task );
-			if( PostQueuedCompletionStatus( Iocp, 0, 0, nullptr ) == FALSE )
+			while( PostQueuedCompletionStatus( Iocp, 0, 0, nullptr ) == FALSE )
 			{
 				// Ошибка
-				PostedTasks.pop_back();
-				return GetLastSystemError();
+				MY_ASSERT( false );
 			}
-
-			return Error();
 		} // Error Service::Post( const std::function<void()> &task )
 
 		void Service::Execute()
@@ -76,7 +73,7 @@ namespace Bicycle
 							// Была извлечена "пустая" задача - означает завершение цикла
 							// Добавляем задачу снова, чтобы другие потоки тоже получили
 							// уведомление о необходимости завершить работу
-							ThrowIfNeed( Post( task ) );
+							Post( task );
 							return;
 						}
 					} // if( pov == nullptr )

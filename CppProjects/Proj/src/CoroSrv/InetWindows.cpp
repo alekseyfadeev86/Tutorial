@@ -1,6 +1,6 @@
 #include <Ws2tcpip.h>
 #include <MSWSock.h>
-#include "CoroInet.hpp"
+#include "CoroSrv/Inet.hpp"
 
 namespace Bicycle
 {

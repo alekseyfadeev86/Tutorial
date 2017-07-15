@@ -5,6 +5,14 @@
 #include <atomic>
 #include <memory>
 
+#ifdef NDEBUG
+	#undef NDEBUG
+	#include <assert.h>
+	#define NDEBUG
+#else
+	#include <assert.h>
+#endif
+
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/syscall.h>

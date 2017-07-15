@@ -1,4 +1,4 @@
-#include "CoroInet.hpp"
+#include "CoroSrv/Inet.hpp"
 #include "sys/types.h"
 #include "sys/socket.h"
 
@@ -188,9 +188,20 @@ namespace Bicycle
 				err_code_t err_code = ErrorCodes::Success;
 				if( was_called )
 				{
+					// Функция connect была вызвана - проверяем состояние сокета
+					// (connect выполняется асинхронно, т.к. fd - неблокирующий,
+					// и может возникнуть ситуация, когда в процессе подключения
+					// возникает ошибка, и epoll_wait реагирует на неё, (пробуждается),
+					// как будто сокет готов к записи)
+					socklen_t sz = sizeof( err_code );
+					if( getsockopt( fd, SOL_SOCKET, SO_ERROR, ( void* ) &err_code, &sz ) == -1 )
+					{
+						return GetLastSystemError();
+					}
 					return err_code;
 				}
 
+				// Вызываем connect для асинхронного подключения
 				if( connect( fd, ( const struct sockaddr* ) &( addr.Addr ),
 				             ( socklen_t ) sizeof( addr.Addr ) ) != 0 )
 				{

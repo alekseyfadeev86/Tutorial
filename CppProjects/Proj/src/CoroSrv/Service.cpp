@@ -1,4 +1,4 @@
-#include "CoroService.hpp"
+#include "CoroSrv/Service.hpp"
 
 #ifndef _WIN32
 #include <unistd.h> // для read
@@ -85,13 +85,7 @@ namespace Bicycle
 						CloseAllDescriptors();
 					}
 				};
-				auto err = Post( task );
-
-				if( err )
-				{
-					MY_ASSERT( false );
-					task();
-				}
+				Post( task );
 			}
 		} // void Service::OnDescriptorRemove()
 
@@ -164,7 +158,8 @@ namespace Bicycle
 				MY_ASSERT( res );
 			});
 
-			return Post( post_task );
+			Post( post_task );
+			return Error();
 		} // Error Go( std::function<void()> task )
 
 		Service::Service(): MustBeStopped( true ),
@@ -395,6 +390,36 @@ namespace Bicycle
 			return info_ptr->ServiceRef.Go( task, stack_sz );
 		} // Error Go( std::function<void()> task )
 
+		void YieldCoro()
+		{
+			SrvInfoStruct *info_ptr = ( SrvInfoStruct* ) SrvInfoPtr.Get();
+			Coroutine *cur_coro_ptr = GetCurrentCoro();
+
+			MY_ASSERT( ( info_ptr == nullptr ) == ( cur_coro_ptr == nullptr ) );
+			if( ( info_ptr == nullptr ) || ( cur_coro_ptr == nullptr ) )
+			{
+				// Выполняем не из сопрограммы сервиса
+				MY_ASSERT( false );
+				throw Exception( ErrorCodes::NotInsideSrvCoro,
+				                 "Not inside service coroutine" );
+			}
+
+			MY_ASSERT( info_ptr->DescriptorTask == nullptr );
+			MY_ASSERT( cur_coro_ptr != &( info_ptr->MainCoro ) );
+			std::function<void()> task( [ info_ptr, cur_coro_ptr ]()
+			{
+				info_ptr->ServiceRef.Post( [ cur_coro_ptr ]()
+				{
+					bool res = cur_coro_ptr->SwitchTo();
+					MY_ASSERT( res );
+				});
+			});
+
+			info_ptr->DescriptorTask = &task;
+			bool res = info_ptr->MainCoro.SwitchTo();
+			MY_ASSERT( res );
+		} // void YieldCoro()
+
 		//-------------------------------------------------------------------------------
 
 		/**
@@ -417,12 +442,19 @@ namespace Bicycle
 			return *ptr;
 		}
 
-		Error BasicDescriptor::PostToSrv( const std::function<void()> &task )
+		ServiceWorker::ServiceWorker(): SrvRef( GetCurrentService() ){}
+
+		void ServiceWorker::PostToSrv( const std::function<void()> &task )
 		{
-			return SrvRef.Post( task );
+			if( !task )
+			{
+				MY_ASSERT( false );
+				throw std::invalid_argument( "Invalid task for post to coroutine service" );
+			}
+			SrvRef.Post( task );
 		}
 
-		void BasicDescriptor::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
+		void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
 		{
 			if( ( task == nullptr ) || !*task )
 			{
@@ -434,16 +466,16 @@ namespace Bicycle
 			MY_ASSERT( info_ptr != nullptr );
 			MY_ASSERT( info_ptr->DescriptorTask == nullptr );
 			info_ptr->DescriptorTask = task;
-			
-			info_ptr->MainCoro.SwitchTo();
-		} // void BasicDescriptor::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
 
-		BasicDescriptor::BasicDescriptor(): SrvRef( GetCurrentService() ),
-#ifdef _WIN32
-		                                    Fd( INVALID_HANDLE_VALUE )
-#else
-		                                    DescriptorData( nullptr )
-#endif
+			info_ptr->MainCoro.SwitchTo();
+		} // void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
+
+		bool ServiceWorker::IsStopped() const
+		{
+			return SrvRef.MustBeStopped.load();
+		}
+
+		AbstractCloser::AbstractCloser(): ServiceWorker(), Ptr()
 		{
 			Ptr.reset( new PtrWithLocker );
 			MY_ASSERT( Ptr );
@@ -452,7 +484,7 @@ namespace Bicycle
 			MY_ASSERT( Ptr );
 		}
 
-		BasicDescriptor::~BasicDescriptor()
+		AbstractCloser::~AbstractCloser()
 		{
 			MY_ASSERT( Ptr );
 			{
@@ -461,7 +493,25 @@ namespace Bicycle
 			}
 			Ptr.reset();
 			SrvRef.OnDescriptorRemove();
+		}
 
+		void AbstractCloser::Close()
+		{
+			Error err;
+			Close( err );
+			ThrowIfNeed( err );
+		}
+
+		BasicDescriptor::BasicDescriptor(): AbstractCloser(),
+#ifdef _WIN32
+		                                    Fd( INVALID_HANDLE_VALUE )
+#else
+		                                    DescriptorData( nullptr )
+#endif
+		{}
+
+		BasicDescriptor::~BasicDescriptor()
+		{
 			Error err;
 			Close( err );
 			MY_ASSERT( !err );
@@ -471,30 +521,14 @@ namespace Bicycle
 		{
 			Error err;
 			Open( err );
-			if( err )
-			{
-				throw Exception( err.Code, err.What.c_str() );
-			}
-		}
-
-		void BasicDescriptor::Close()
-		{
-			Error err;
-			Close( err );
-			if( err )
-			{
-				throw Exception( err.Code, err.What.c_str() );
-			}
+			ThrowIfNeed( err );
 		}
 
 		void BasicDescriptor::Cancel()
 		{
 			Error err;
 			Cancel( err );
-			if( err )
-			{
-				throw Exception( err.Code, err.What.c_str() );
-			}
+			ThrowIfNeed( err );
 		}
 	} // namespace CoroService
 } // namespace Bicycle

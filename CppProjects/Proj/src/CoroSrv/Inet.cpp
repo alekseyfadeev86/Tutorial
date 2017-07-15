@@ -1,4 +1,4 @@
-#include "CoroInet.hpp"
+#include "CoroSrv/Inet.hpp"
 
 #ifndef _WIN32
 #include <string.h> // Для memset

@@ -8,6 +8,14 @@
 #include <thread>
 #include <atomic>
 
+#ifdef NDEBUG
+	#undef NDEBUG
+	#include <assert.h>
+	#define NDEBUG
+#else
+	#include <assert.h>
+#endif
+
 namespace StackTest
 {
 	/// Проверяет стек из предположения, что он пуст
@@ -860,6 +868,7 @@ void lockfree_test()
 void lock_free_tests()
 {
 	// Проверка контейнеров
+#ifdef _DEBUG
 #ifdef _WIN32
 	printf( "Lockfree containers testing\n" );
 //	printf( "Press enter to begin\n" );
@@ -869,11 +878,16 @@ void lock_free_tests()
 #endif
 	fflush( stdout );
 //	getchar();
+#endif
 
 	//for( uint16_t t = 0; t < 1000; ++t )
-	for( uint16_t t = 0; t < 5; ++t )
+	for( uint16_t t = 0; t < 0x100; ++t )
 	{
-		if( 1)//( t % 10 ) == 0 )
+#ifdef _DEBUG
+		if( ( t % 10 ) == 0 )
+#else
+		if( false )
+#endif
 		{
 #ifdef _WIN32
 			printf( "Multithread debug, step %i\n", t + 1 );
@@ -886,6 +900,7 @@ void lock_free_tests()
 		std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
 	}
 
+#ifdef _DEBUG
 #ifdef _WIN32
 	printf( "Lockfree test finished\n" );
 //	printf( "Lockfree test finished.Press enter to finish\n" );
@@ -895,4 +910,5 @@ void lock_free_tests()
 #endif
 	fflush( stdout );
 //	getchar();
+#endif
 }
