@@ -1,8 +1,8 @@
 cmake_minimum_required( VERSION 2.8 )
 project( Tests )
 
-set( INCLUDE_DIR ./include )
-set( SRC_DIR ./src )
+set( INCLUDE_DIR ../include )
+set( SRC_DIR ../src )
 
 include_directories( . ${INCLUDE_DIR} )
 

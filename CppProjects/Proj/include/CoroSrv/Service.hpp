@@ -75,7 +75,7 @@ namespace Bicycle
 				LockFree::ForwardList<BaseDescWeakPtr> Descriptors;
 
 				/// Счётчик вызовов OnDescriptorRemove (чтобы запускать очистку Descriptors от пустых указателей не каждый раз)
-				std::atomic<uint8_t> DescriptorsDeleteCount;
+				std::atomic<uint64_t> DescriptorsDeleteCount;
 
 #ifdef _WIN32
 				/// Дескриптор порта завершения ввода-вывода
@@ -89,19 +89,22 @@ namespace Bicycle
 
 				/// Очередь на отложенное удаление
 				LockFree::DeferredDeleter DeleteQueue;
-#endif
 
-				/// Задачи, готовые к исполнению
-				std::deque<std::function<void()>> PostedTasks;
+				/// Сопрограммы, готовые к исполнению
+				std::deque<Coroutine*> CoroutinesToExeceute;
 
 				/// Объект для синхронизации доступа к PostedTasks
-				SpinLock TasksMutex;
+				SpinLock CorosMutex;
+#endif
 
 				/// Закрывает все зарегистрированные дескрипторы и удаляет их из очереди
 				void CloseAllDescriptors();
 
-				/// Обработка удаления дескриптора (удаление пустых указателей из Descriptors)
+				/// Обработка удаления дескриптора
 				void OnDescriptorRemove();
+
+				/// Удаление указателей на закрытые дескрипторы
+				void RemoveClosedDescriptors();
 
 				/// Платформозависимая инициализация сервиса
 				void Initialize();
@@ -109,8 +112,8 @@ namespace Bicycle
 				/// Закрытие сервиса
 				void Close();
 
-				/// Добавление задачи в очередь Execute
-				void Post( const std::function<void()> &task );
+				/// Добавление готовой сопрограммы в очередь на исполнение
+				void Post( Coroutine *coro_ptr );
 
 				/// Цикл ожидания готовности сопрограмм и их выполнения
 				void Execute();
@@ -263,12 +266,10 @@ namespace Bicycle
 				ServiceWorker& operator=( const ServiceWorker& ) = delete;
 
 				/**
-				 * @brief PostToSrv Добавление задачи в Post сервиса
-				 * @param task задача
-				 * @throw std::invalid_argument, если task - "пустая задача",
-				 * т.е., ( bool ) task == false
+				 * @brief PostToSrv Добавление сопрограммы в Post сервиса
+				 * @param coro_ref ссылка на сопрограмму
 				 */
-				void PostToSrv( const std::function<void()> &task );
+				void PostToSrv( Coroutine &coro_ref );
 
 				/// Сохранение указателя на задачу и переход в основную сопрограмму сервиса
 				void SetPostTaskAndSwitchToMainCoro( std::function<void()> *task );
@@ -385,10 +386,16 @@ namespace Bicycle
 				void Open();
 
 				/**
-				 * @brief Close закрытие сокета
+				 * @brief Close закрытие дескриптора
 				 * @param err ссылка на ошибку, куда будет записан результат операции
 				 */
 				virtual void Close( Error &err ) override final;
+
+				/**
+				 * @brief CLose закрытие дескриптора
+				 * @throw Exception в случае ошибки
+				 */
+				void Close();
 
 				/**
 				 * @brief Cancel отмена всех операций, ожидающих завершения

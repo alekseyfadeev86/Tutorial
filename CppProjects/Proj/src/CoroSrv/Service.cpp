@@ -11,6 +11,9 @@ namespace Bicycle
 		/// Размер стека сопрограммы
 		const size_t CoroStackSize = 10*1024;
 
+		/// Периодичность удаления указателей на закрытые дескрипторы
+		const uint64_t DescriptorsRemovePeriod = 0x40;
+
 		/// Структура с информацией для сервисов
 		struct SrvInfoStruct
 		{
@@ -63,31 +66,38 @@ namespace Bicycle
 
 		void Service::OnDescriptorRemove()
 		{
-			if( ( ++DescriptorsDeleteCount % 0x40 ) == 0 )
-			{
-				std::function<void()> task = [ this ]()
-				{
-					auto desc = Descriptors.Release();
-
-					desc.RemoveIf( []( const BaseDescWeakPtr &elem ) -> bool
-					{
-						return elem.expired();
-					});
-
-					Descriptors.Push( std::move( desc ) );
-
-					if( MustBeStopped.load() )
-					{
-						// Закрываем все зарегистрированные дескрипторы, очищаем Descriptors
-						// (тут оно надо, т.к. если одновременно будут вызваны Stop и
-						// OnDescriptorRemove, то Stop может застать пустую (временно) очередь
-						// Descriptors)
-						CloseAllDescriptors();
-					}
-				};
-				Post( task );
-			}
+			++DescriptorsDeleteCount;
 		} // void Service::OnDescriptorRemove()
+
+		void Service::RemoveClosedDescriptors()
+		{
+			if( DescriptorsDeleteCount.load() < DescriptorsRemovePeriod )
+			{
+				return;
+			}
+
+			MY_ASSERT( DescriptorsDeleteCount.load() >= DescriptorsRemovePeriod );
+			DescriptorsDeleteCount.store( 0 );
+
+			// Удаляем указатели на закрытые дескрипторы из Descriptors
+			auto desc = Descriptors.Release();
+
+			desc.RemoveIf( []( const BaseDescWeakPtr &elem ) -> bool
+			{
+				return elem.expired();
+			});
+
+			Descriptors.Push( std::move( desc ) );
+
+			if( MustBeStopped.load() )
+			{
+				// Закрываем все зарегистрированные дескрипторы, очищаем Descriptors
+				// (тут оно надо, т.к. если одновременно будут вызваны Stop и
+				// OnDescriptorRemove, то Stop может застать пустую (временно) очередь
+				// Descriptors)
+				CloseAllDescriptors();
+			}
+		} // void Service::RemoveClosedDescriptors()
 
 		void Service::ExecLeftTasks()
 		{
@@ -135,30 +145,26 @@ namespace Bicycle
 
 			++CoroCount;
 
-			// Логика следующая: формируем задачу, которая 100% будет выполнена из основной сопрограммы потока
+			// Логика следующая: созддаём новую сопрограмму, добавляем в очередь. Затем указатель
+			// на сопрограмму будет извлечёно в основной сопрограмме, и оттуда будет совершёно переход.
 			// Когда сопрограмма завершается, управление переходит в сопрограмму,
 			// которая удаляет её и передаёт управление в основную сопрограмму
 			// Если отказаться от Post-а, можем попасть в ситуацию, когда управление больше не будет передано
-			// в текущую сопрограмму
-			std::function<void()> post_task( [ this, task, stack_sz ]
+			// в текущую сопрограмму. Также будет глюк, если вызов не из сопрограммы.
+			CoroTaskType coro_fnc = [ task ]() -> Coroutine*
 			{
-				CoroTaskType coro_fnc = [ task ]() -> Coroutine*
-				{
-					task();
-					SrvInfoStruct *info_ptr = ( SrvInfoStruct* ) SrvInfoPtr.Get();
-					Coroutine *res = info_ptr != nullptr ? &( info_ptr->DeleteCoro ) : nullptr;
-					MY_ASSERT( res != nullptr );
-					MY_ASSERT( !res->IsDone() );
-					return res;
-				};
+				task();
+				SrvInfoStruct *info_ptr = ( SrvInfoStruct* ) SrvInfoPtr.Get();
+				Coroutine *res = info_ptr != nullptr ? &( info_ptr->DeleteCoro ) : nullptr;
+				MY_ASSERT( res != nullptr );
+				MY_ASSERT( !res->IsDone() );
+				return res;
+			};
 
-				// Создаваемая сопрограмма будет позже удалена в цикле сопрограммы очистки
-				Coroutine *new_coro = new Coroutine( coro_fnc, stack_sz == 0 ? CoroStackSize : stack_sz );
-				bool res = new_coro->SwitchTo();
-				MY_ASSERT( res );
-			});
+			// Создаваемая сопрограмма будет позже удалена в цикле сопрограммы очистки
+			Coroutine *new_coro_ptr = new Coroutine( coro_fnc, stack_sz == 0 ? CoroStackSize : stack_sz );
 
-			Post( post_task );
+			Post( new_coro_ptr );
 			return Error();
 		} // Error Go( std::function<void()> task )
 
@@ -208,7 +214,9 @@ namespace Bicycle
 			}
 
 			MustBeStopped.store( false );
-			MY_ASSERT( PostedTasks.empty() );
+#ifndef _WIN32
+			MY_ASSERT( CoroutinesToExeceute.empty() );
+#endif
 
 			return true;
 		} // bool Service::Restart()
@@ -234,18 +242,19 @@ namespace Bicycle
 			}
 
 			MY_ASSERT( CoroCount.load() == 0 );
-			MY_ASSERT( PostedTasks.empty() || ( !PostedTasks.front() && ( PostedTasks.size() == 1 ) ) );
-
-			PostedTasks.clear();
-			RunFlag.clear();
 
 #ifndef _WIN32
+			MY_ASSERT( CoroutinesToExeceute.empty() || ( ( CoroutinesToExeceute.front() == nullptr ) && ( CoroutinesToExeceute.size() == 1 ) ) );
+			CoroutinesToExeceute.clear();
 			char buf[ 100 ] = { 0 };
+			int read_res = -1;
 			for( Error err; err.Code != EAGAIN; err = GetLastSystemError() )
 			{
-				read( PostPipe[ 0 ], buf, sizeof( buf ) );
+				read_res = read( PostPipe[ 0 ], buf, sizeof( buf ) );
 			}
 #endif
+
+			RunFlag.clear();
 			return true;
 		} // bool Service::Stop()
 
@@ -296,7 +305,7 @@ namespace Bicycle
 							if( --CoroCount == 0 )
 							{
 								// Сопрограммы закончились
-								Post( std::function<void()>() );
+								Post( nullptr );
 							}
 						}
 
@@ -408,11 +417,7 @@ namespace Bicycle
 			MY_ASSERT( cur_coro_ptr != &( info_ptr->MainCoro ) );
 			std::function<void()> task( [ info_ptr, cur_coro_ptr ]()
 			{
-				info_ptr->ServiceRef.Post( [ cur_coro_ptr ]()
-				{
-					bool res = cur_coro_ptr->SwitchTo();
-					MY_ASSERT( res );
-				});
+				info_ptr->ServiceRef.Post( cur_coro_ptr );
 			});
 
 			info_ptr->DescriptorTask = &task;
@@ -444,14 +449,9 @@ namespace Bicycle
 
 		ServiceWorker::ServiceWorker(): SrvRef( GetCurrentService() ){}
 
-		void ServiceWorker::PostToSrv( const std::function<void()> &task )
+		void ServiceWorker::PostToSrv( Coroutine &coro_ref )
 		{
-			if( !task )
-			{
-				MY_ASSERT( false );
-				throw std::invalid_argument( "Invalid task for post to coroutine service" );
-			}
-			SrvRef.Post( task );
+			SrvRef.Post( &coro_ref );
 		}
 
 		void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
@@ -521,6 +521,13 @@ namespace Bicycle
 		{
 			Error err;
 			Open( err );
+			ThrowIfNeed( err );
+		}
+
+		void BasicDescriptor::Close()
+		{
+			Error err;
+			Close( err );
 			ThrowIfNeed( err );
 		}
 

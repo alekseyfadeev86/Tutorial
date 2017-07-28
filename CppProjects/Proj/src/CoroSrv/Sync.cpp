@@ -79,13 +79,7 @@ namespace Bicycle
 			Coroutine *coro_ptr = *ptr;
 			ptr.reset();
 			MY_ASSERT( coro_ptr != nullptr );
-
-			std::function<void()> task = [ coro_ptr ]()
-			{
-				bool res = coro_ptr->SwitchTo();
-				MY_ASSERT( res );
-			};
-			PostToSrv( task );
+			PostToSrv( *coro_ptr );
 		} // void Mutex::Unlock()
 
 		//-----------------------------------------------------------------------------------------
@@ -177,11 +171,7 @@ namespace Bicycle
 
 			if( by_push )
 			{
-				PostToSrv( [ coro_ptr ]()
-				{
-					bool res = coro_ptr->SwitchTo();
-					MY_ASSERT( res );
-				});
+				PostToSrv( *coro_ptr );
 			}
 			else
 			{
@@ -485,12 +475,7 @@ namespace Bicycle
 			Coroutine *coro_ptr = *ptr;
 			ptr.reset();
 			MY_ASSERT( coro_ptr != nullptr );
-
-			PostToSrv( [ coro_ptr ]()
-			{
-				bool res = coro_ptr->SwitchTo();
-				MY_ASSERT( res );
-			} );
+			PostToSrv( *coro_ptr );
 		}
 
 		Semaphore::Semaphore(): Counter( 0 ), Waiters( 0xFF ) {}
@@ -600,12 +585,7 @@ namespace Bicycle
 				Coroutine *coro_ptr = *ptr;
 				ptr.reset();
 				MY_ASSERT( coro_ptr != nullptr );
-
-				PostToSrv( [ coro_ptr ]()
-				{
-					bool res = coro_ptr->SwitchTo();
-					MY_ASSERT( res );
-				} );
+				PostToSrv( *coro_ptr );
 			} // for( int64_t val = StateFlag.exchange( -1 ); val > 0; --val )
 		}
 

@@ -66,17 +66,19 @@ namespace Bicycle
 			}
 		}
 
-		void Service::Post( const std::function<void ()> &task )
+		void Service::Post( Coroutine *coro_ptr )
 		{
-			LockGuard<SpinLock> lock( TasksMutex );
-			bool need_to_write = PostedTasks.empty();
-			PostedTasks.push_back( task );
+			LockGuard<SpinLock> lock( CorosMutex );
+			bool need_to_write = CoroutinesToExeceute.empty();
+			CoroutinesToExeceute.push_back( coro_ptr );
 			if( !need_to_write )
 			{
 				// Записываем 1 байт только, если очередь была пуста
 				return;
 			}
 
+			// Очередь была пуста - записываем 1 байт в канал, чтобы
+			// epoll среагировал
 			char c = 123;
 			int res = -1;
 
@@ -88,13 +90,16 @@ namespace Bicycle
 				MY_ASSERT( ( res != -1 ) || ( errno == EINTR ) ); // Прервано сигналом
 			}
 			while( res < 1 );
-		} // void Service::Post( const std::function<void ()> task )
+		} // void Service::Post( Coroutine *coro_ptr )
 
 		void Service::Execute()
 		{
 			epoll_event ev_data;
-			while( 1 )
+			while( CoroCount.load() > 0 )
 			{
+				// Удаляем указатели на закрытые дескрипторы из списка (если нужно)
+				RemoveClosedDescriptors();
+
 				// Подчищаем очередь на удаление
 				// (удаляем что можно)
 				DeleteQueue.Clear();
@@ -122,21 +127,22 @@ namespace Bicycle
 				if( ev_data.data.u64 == 0 )
 				{
 					// Событие на PostPipe[ 0 ]
-					std::function<void()> task;
+					Coroutine *coro_to_exec_ptr = nullptr;
 					{
-						LockGuard<SpinLock> lock( TasksMutex );
-						if( PostedTasks.empty() )
+						LockGuard<SpinLock> lock( CorosMutex );
+						if( CoroutinesToExeceute.empty() )
 						{
-							// Задач нет
+							// Сопрограмм нет
 							continue;
 						}
 
-						task = std::move( PostedTasks.front() );
-						PostedTasks.pop_front();
+						coro_to_exec_ptr = CoroutinesToExeceute.front();
+						CoroutinesToExeceute.pop_front();
 
-						if( PostedTasks.empty() )
+						if( CoroutinesToExeceute.empty() )
 						{
-							// Была извлечена последняя задача - считываем байт
+							// Была извлечена последняя сопрограмма - считываем байт,
+							// чтобы epoll перестал срабатывать на канал
 							char c = 0;
 							do
 							{
@@ -148,21 +154,21 @@ namespace Bicycle
 							while( res < 1 );
 
 							MY_ASSERT( c == 123 );
-						} // if( PostedTasks.empty() )
+						} // if( CoroutinesToExeceute.empty() )
 					}
 
-					// Обрабатываем задачу
-					if( task )
+					if( coro_to_exec_ptr != nullptr )
 					{
-						// Задача не "пустая" - выполняем
-						task();
+						// Переходим в готовую к выполнению сопрограмму
+						bool res = coro_to_exec_ptr->SwitchTo();
+						MY_ASSERT( res );
 					}
-					else
+					else if( CoroCount.load() == 0 )
 					{	
-						// Была извлечена "пустая" задача - означает завершение цикла
-						// Добавляем задачу снова, чтобы другие потоки тоже получили
-						// уведомление о необходимости завершить работу
-						Post( task );
+						// Был извлечён нулевой указатель на сопрограмму - означает завершение цикла
+						// Добавляем указатель снова, чтобы другие потоки тоже получили
+						// уведомление о необходимости завершить работу, и выходим
+						Post( nullptr );
 						return;
 					}
 				} // if( ev_data.data.ptr == nullptr )
@@ -217,11 +223,7 @@ namespace Bicycle
 						ptr = waiters.Pop();
 						MY_ASSERT( ptr != nullptr );
 						ptr->LastEpollEvents = ev_data.events;
-						Post( [ ptr ]()
-						{
-							bool res = ptr->CoroRef.SwitchTo();
-							MY_ASSERT( res );
-						});
+						Post( &ptr->CoroRef );
 					} // while( waiters )
 #ifdef _DEBUG
 					}
@@ -238,7 +240,7 @@ namespace Bicycle
 
 				// Выполняем задачу, "оставленную" дочерней сопрограммой
 				ExecLeftTasks();
-			} // while( 1 )
+			} // while( CoroCount.load() > 0 )
 		} // void Service::Execute()
 
 		//-------------------------------------------------------------------------------
@@ -431,13 +433,17 @@ namespace Bicycle
 							{
 								// Успех
 								success = true;
+                                                                MY_ASSERT( !err );
 							}
 							else
 							{
 								// Ошибка настройки epoll: запоминаем ошибку, возвращаемся в сопрограмму
 								err = GetLastSystemError();
+
 								MY_ASSERT( err );
+                                                                MY_ASSERT( !success );
 							}
+                                                        MY_ASSERT( success == !err );
 						} // if( desc_data->Fd != -1 )
 						else
 						{
@@ -445,6 +451,10 @@ namespace Bicycle
 							// возвращаемся в сопрограмму
 							err.Code = ErrorCodes::NotOpen;
 							err.What = "Descriptor was closed";
+
+                                                        MY_ASSERT( err );
+                                                        MY_ASSERT( !success );
+                                                        MY_ASSERT( success == !err );
 						}
 					} // SharedLockGuard<SharedSpinLock> lock( desc_data->Lock );
 
@@ -605,11 +615,7 @@ namespace Bicycle
 					ptr = waiters.Pop();
 					MY_ASSERT( ptr != nullptr );
 					ptr->WasCancelled = true;
-					PostToSrv( [ ptr ]()
-					{
-						bool res = ptr->CoroRef.SwitchTo();
-						MY_ASSERT( res );
-					});
+					PostToSrv( ptr->CoroRef );
 				} // while( waiters )
 			} // for( auto &waiters : coro_queues )
 		} // void BasicDescriptor::Close( Error &err )
@@ -662,11 +668,7 @@ namespace Bicycle
 					ptr = waiters.Pop();
 					MY_ASSERT( ptr != nullptr );
 					ptr->WasCancelled = true;
-					PostToSrv( [ ptr ]()
-					{
-						bool res = ptr->CoroRef.SwitchTo();
-						MY_ASSERT( res );
-					});
+					PostToSrv( ptr->CoroRef );
 				} // while( waiters )
 			} // for( auto &waiters : coro_queues )
 		} // void BasicDescriptor::Cancel( Error &err )

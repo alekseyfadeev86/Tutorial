@@ -172,13 +172,9 @@ namespace Bicycle
 						// Таймер сработал
 						*( elem.second ) = 0;
 
-						// Добавляем задачу перехода к сопрограмме
-						Coroutine *coro_ptr = elem.first;
-						PostToSrv( [ coro_ptr ]()
-						{
-							bool res = coro_ptr->SwitchTo();
-							MY_ASSERT( res );
-						} );
+						// Передаём сервису указатель на сопрограмму для выполнения
+						MY_ASSERT( elem.first != nullptr );
+						PostToSrv( *elem.first );
 					}
 				} // while( waiters )
 #ifdef _DEBUG
@@ -254,13 +250,9 @@ namespace Bicycle
 						MY_ASSERT( ( elem.first != nullptr ) && ( elem.second != nullptr ) );
 						*( elem.second ) = -1;
 
-						// Добавляем задачу перехода к сопрограмме
-						Coroutine *coro_ptr = elem.first;
-						PostToSrv( [ coro_ptr ]()
-						{
-							bool res = coro_ptr->SwitchTo();
-							MY_ASSERT( res );
-						} );
+						// Передаём сервису указатель на сопрограмму для выполнения
+						MY_ASSERT( elem.first != nullptr );
+						PostToSrv( *elem.first );
 					} // while( waiters )
 #ifdef _DEBUG
 					}
@@ -336,13 +328,9 @@ namespace Bicycle
 					// Операция ожидания отменена
 					*( elem.second ) = 1;
 
-					// Добавляем задачу перехода к сопрограмме
-					Coroutine *coro_ptr = elem.first;
-					PostToSrv( [ coro_ptr ]()
-					{
-						bool res = coro_ptr->SwitchTo();
-						MY_ASSERT( res );
-					} );
+					// Передаём сервису указатель на сопрограмму для выполнения
+					MY_ASSERT( elem.first != nullptr );
+					PostToSrv( *elem.first );
 				}
 			} // while( waiters )
 #ifdef _DEBUG

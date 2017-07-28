@@ -22,16 +22,14 @@ namespace Bicycle
 			CloseHandle( Iocp );
 		}
 
-		void Service::Post( const std::function<void()> &task )
+		void Service::Post( Coroutine *coro_ptr )
 		{
-			LockGuard<SpinLock> lock( TasksMutex );
-			PostedTasks.push_back( task );
-			while( PostQueuedCompletionStatus( Iocp, 0, 0, nullptr ) == FALSE )
+			while( PostQueuedCompletionStatus( Iocp, 0, 0xFF, ( LPOVERLAPPED ) coro_ptr ) == FALSE )
 			{
 				// Ошибка
 				MY_ASSERT( false );
 			}
-		} // Error Service::Post( const std::function<void()> &task )
+		}
 
 		void Service::Execute()
 		{
@@ -39,44 +37,36 @@ namespace Bicycle
 			ULONG_PTR comp_key = 0;
 			LPOVERLAPPED pov = nullptr;
 
-			while( 1 )
+			while( CoroCount.load() > 0 )
 			{
+				// Удаляем указатели на закрытые дескрипторы из списка (если нужно)
+				RemoveClosedDescriptors();
 				BOOL res = GetQueuedCompletionStatus( Iocp, &bytes_count, &comp_key, &pov, INFINITE );
 				if( res != FALSE )
 				{
 					// Успех
-					if( pov == nullptr )
+					if( comp_key != 0 )
 					{
 						// Была добавлена задача через Post
+						MY_ASSERT( comp_key == 0xFF );
 						MY_ASSERT( bytes_count == 0 );
-						MY_ASSERT( comp_key == 0 );
-						std::function<void()> task;
-						{
-							LockGuard<SpinLock> lock( TasksMutex );
-							if( PostedTasks.empty() )
-							{
-								MY_ASSERT( false );
-								continue;
-							}
+						Coroutine *coro_ptr = ( Coroutine* ) pov;
 
-							task = std::move( PostedTasks.front() );
-							PostedTasks.pop_front();
-						}
-
-						if( task )
+						if( coro_ptr != nullptr )
 						{
-							// Выполняем задачу
-							task();
+							// Переходим в готовую к выполнению сопрограмму
+							bool res = coro_ptr->SwitchTo();
+							MY_ASSERT( res );
 						}
-						else
+						else if( CoroCount.load() == 0 )
 						{
-							// Была извлечена "пустая" задача - означает завершение цикла
-							// Добавляем задачу снова, чтобы другие потоки тоже получили
-							// уведомление о необходимости завершить работу
-							Post( task );
+							// Был извлечён нулевой указатель на сопрограмму - означает завершение цикла
+							// Добавляем указатель снова, чтобы другие потоки тоже получили
+							// уведомление о необходимости завершить работу, и выходим
+							Post( nullptr );
 							return;
 						}
-					} // if( pov == nullptr )
+					} // if( comp_key != 0 )
 					else
 					{
 						// Событие на одном из дескрипторов
@@ -132,7 +122,7 @@ namespace Bicycle
 
 				// Выполняем задачу, "оставленную" дочерней сопрограммой
 				ExecLeftTasks();
-			} // while( 1 )
+			} // while( CoroCount.load() > 0 )
 		} // void Service::Execute()
 
 		//-------------------------------------------------------------------------------
