@@ -48,7 +48,46 @@ namespace Bicycle
 		typedef std::pair<AbstractCloser*, SpinLock> PtrWithLocker;
 		typedef std::shared_ptr<PtrWithLocker> BaseDescPtr;
 		typedef std::weak_ptr<PtrWithLocker> BaseDescWeakPtr;
+		
+#ifdef _WIN32
+		/// Структура с данными, возвращаемая Iocp
+		struct IocpStruct
+		{
+			/// Структура, необходимая для всех перекрывающих задач
+			OVERLAPPED Ov;
 
+			/// Указатель на сопрограмму, на которую надо перейти
+			Coroutine *Coro;
+
+			/// Количество байт, котрое было прочитано
+			size_t IoSize;
+
+			/// Код ошибки
+			err_code_t ErrorCode;
+		};
+#else
+		/// Структура с данными для перехода в сопрограмму
+		struct EpWaitStruct
+		{
+			/// Ссылка на сопрограмму, на которую надо перейти
+			Coroutine &CoroRef;
+
+			/// Параметр events от последнего epoll_event-а
+			uint64_t LastEpollEvents;
+
+			/// Задача была отменена
+			bool WasCancelled;
+
+			EpWaitStruct( Coroutine &coro_ref );
+		};
+
+		/// Тип списка указателей на структуры сопрограмм
+		typedef LockFree::ForwardList<EpWaitStruct*> EpWaitList;
+
+		/// Список указателей на структуры сопрограмм + флаг срабатываний epoll-а
+		typedef std::pair<EpWaitList, std::atomic_flag> EpWaitListWithFlag;
+#endif
+		
 		/// Класс сервиса (очереди) сопрограмм
 		class Service
 		{
@@ -77,12 +116,15 @@ namespace Bicycle
 				/// Счётчик вызовов OnDescriptorRemove (чтобы запускать очистку Descriptors от пустых указателей не каждый раз)
 				std::atomic<uint64_t> DescriptorsDeleteCount;
 
+				/// Флаг, показывающий необходимость очистки пустых указателей из Descriptors
+				std::atomic<bool> NeedToClearDescriptors;
+
 #ifdef _WIN32
 				/// Дескриптор порта завершения ввода-вывода
 				HANDLE Iocp;
 #else
-				/// Дескрипторы epoll (основной, на чтение, на запись, на чтение внеполосных данных)
-				int EpollFds[ 4 ];
+				/// Дескриптор epoll
+				int EpollFd;
 
 				/// Анонимный канал, используемый для добавления в очередь готовых к исполнению задач
 				int PostPipe[ 2 ];
@@ -91,10 +133,20 @@ namespace Bicycle
 				LockFree::DeferredDeleter DeleteQueue;
 
 				/// Сопрограммы, готовые к исполнению
-				std::deque<Coroutine*> CoroutinesToExeceute;
+				LockFree::ForwardList<Coroutine*> CoroutinesToExecute[ 8 ];
 
-				/// Объект для синхронизации доступа к PostedTasks
-				SpinLock CorosMutex;
+				/// Счётчик срабатываний Post-а
+				std::atomic<uint8_t> CoroListNum;
+				
+				/// Обработка сопрограмм, добавленных через Post
+				void WorkPosted();
+				
+				/**
+				 * @brief WorkEpoll обработка готовности дескриптора
+				 * @param coros_list набор ожидающих сопрограмм
+				 * @param evs_mask маска событий epoll
+				 */
+				void WorkEpoll( EpWaitListWithFlag &coros_list, uint32_t evs_mask );
 #endif
 
 				/// Закрывает все зарегистрированные дескрипторы и удаляет их из очереди
@@ -118,7 +170,7 @@ namespace Bicycle
 				/// Цикл ожидания готовности сопрограмм и их выполнения
 				void Execute();
 
-				/// Выполнение (в основной сопрограмме) задач, "оатсвленных" дочерней, из которой перешли
+				/// Выполнение (в основной сопрограмме) задач, "оставленных" дочерней, из которой перешли
 				void ExecLeftTasks();
 
 				/**
@@ -194,40 +246,7 @@ namespace Bicycle
 
 		//-------------------------------------------------------------------------------
 
-#ifdef _WIN32
-		/// Структура с данными, возвращаемая Iocp
-		struct IocpStruct
-		{
-			/// Структура, необходимая для всех перекрывающих задач
-			OVERLAPPED Ov;
-
-			/// Указатель на сопрограмму, на которую надо перейти
-			Coroutine *Coro;
-
-			/// Количество байт, котрое было прочитано
-			size_t IoSize;
-
-			/// Код ошибки
-			err_code_t ErrorCode;
-		};
-#else
-		/// Структура с данными для перехода в сопрограмму
-		struct EpWaitStruct
-		{
-			/// Ссылка на сопрограмму, на которую надо перейти
-			Coroutine &CoroRef;
-
-			/// Параметр events от последнего epoll_event-а
-			uint64_t LastEpollEvents;
-
-			/// Задача была отменена
-			bool WasCancelled;
-
-			EpWaitStruct( Coroutine &coro_ref );
-		};
-
-		typedef LockFree::ForwardList<EpWaitStruct*> EpWaitList;
-
+#ifndef _WIN32
 		/// Структура с данными одного дескриптора
 		struct DescriptorStruct
 		{
@@ -235,13 +254,13 @@ namespace Bicycle
 			int Fd;
 
 			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к чтению
-			EpWaitList ReadQueue;
+			EpWaitListWithFlag ReadQueue;
 
 			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к записи
-			EpWaitList WriteQueue;
+			EpWaitListWithFlag WriteQueue;
 
 			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к чтению внеполосных данных
-			EpWaitList ReadOobQueue;
+			EpWaitListWithFlag ReadOobQueue;
 			
 			/// Объект синхронизации доступа к полям структуры
 			SharedSpinLock Lock;
@@ -322,24 +341,7 @@ namespace Bicycle
 
 				/// Привязка нового файлового дескриптора к iocp
 				Error RegisterNewDescriptor( HANDLE fd );
-#else
-				/// Указатель на структуту с дескриптором и очередями
-				std::shared_ptr<DescriptorStruct> DescriptorData;
 
-				/// Объект синхронизации доступа к структуре дескриптора
-				mutable SharedSpinLock DescriptorLock;
-
-				/// Открывает и возвращает новый дескриптор, записывает ошибку в err
-				virtual int OpenNewDescriptor( Error &err ) = 0;
-				
-				/// Закрывает дескриптор, записывает ошибку в err
-				virtual void CloseDescriptor( int fd, Error &err );
-
-				/// Привязка нового файлового дескриптора к epoll-у
-				Error RegisterNewDescriptor( int fd );
-#endif
-
-#ifdef _WIN32
 				/**
 				 * @brief ExecuteIoTask выполнение асинхронной задачи ввода-вывода
 				 * @param task выполняемая задача (например, WSAReadFrom)
@@ -350,6 +352,20 @@ namespace Bicycle
 				 */
 				Error ExecuteIoTask( const IoTaskType &task, size_t &io_size );
 #else
+				typedef std::unique_ptr<DescriptorStruct, std::function<void( DescriptorStruct* )>> desc_ptr_t;
+
+				/// Указатель на структуту с дескриптором и очередями
+				const desc_ptr_t DescriptorData;
+
+				/// Открывает и возвращает новый дескриптор, записывает ошибку в err
+				virtual int OpenNewDescriptor( Error &err ) = 0;
+				
+				/// Закрывает дескриптор, записывает ошибку в err
+				virtual void CloseDescriptor( int fd, Error &err );
+
+				/// Привязка нового файлового дескриптора к epoll-у
+				Error InitAndRegisterNewDescriptor( int fd, const desc_ptr_t &desc_data_ptr );
+
 				enum IoTaskTypeEnum { Read = 0, Write = 1, ReadOob = 2 };
 
 				/**
@@ -361,8 +377,6 @@ namespace Bicycle
 				 */
 				Error ExecuteIoTask( const IoTaskType &task,
 				                     IoTaskTypeEnum task_type );
-
-				std::shared_ptr<DescriptorStruct> NewDescriptorStruct( int fd );
 #endif
 
 				BasicDescriptor();

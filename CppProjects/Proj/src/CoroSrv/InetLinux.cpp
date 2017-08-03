@@ -68,28 +68,10 @@ namespace Bicycle
 
 		void BasicSocket::Bind( const Ip4Addr &addr, Error &err )
 		{
-			std::shared_ptr<DescriptorStruct> desc_data;
-			{
-				LockGuard<SharedSpinLock> lock( DescriptorLock );
-				desc_data = DescriptorData;
-			}
+			MY_ASSERT( DescriptorData );
+			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
 
-			if( !desc_data )
-			{
-				err.Code = ErrorCodes::NotOpen;
-				err.What = "Socket is not open";
-				return;
-			}
-
-			SharedLockGuard<SharedSpinLock> lock( desc_data->Lock );
-			if( desc_data->Fd == -1 )
-			{
-				err.Code = ErrorCodes::NotOpen;
-				err.What = "Socket is not open";
-				return;
-			}
-
-			int bind_res = bind( desc_data->Fd,
+			int bind_res = bind( DescriptorData->Fd,
 			                     ( struct sockaddr* ) &addr.Addr,
 			                     ( socklen_t ) sizeof( addr.Addr ) );
 			err = bind_res != 0 ? GetLastSystemError() : Error();
@@ -284,27 +266,9 @@ namespace Bicycle
 
 		void TcpAcceptor::Listen( uint16_t backlog, Error &err )
 		{
-			std::shared_ptr<DescriptorStruct> desc_data;
-			{
-				LockGuard<SharedSpinLock> lock( DescriptorLock );
-				desc_data = DescriptorData;
-			}
-
-			if( !desc_data )
-			{
-				err.Code = ErrorCodes::NotOpen;
-				err.What = "Socket is not open";
-				return;
-			}
-
-			SharedLockGuard<SharedSpinLock> lock( desc_data->Lock );
-			if( desc_data->Fd == -1 )
-			{
-				err.Code = ErrorCodes::NotOpen;
-				err.What = "Socket is not open";
-				return;
-			}
-			err = listen( desc_data->Fd, ( int ) backlog ) == 0 ? Error() : GetLastSystemError();
+			MY_ASSERT( DescriptorData );
+			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
+			err = listen( DescriptorData->Fd, ( int ) backlog ) == 0 ? Error() : GetLastSystemError();
 		}
 
 		void TcpAcceptor::Accept( TcpConnection &conn, Ip4Addr &addr, Error &err )
@@ -333,20 +297,19 @@ namespace Bicycle
 				// Новое соединение успешно принято
 				MY_ASSERT( new_conn != -1 );
 
-				LockGuard<SharedSpinLock> lock( conn.DescriptorLock );
-				if( !conn.DescriptorData )
+				MY_ASSERT( conn.DescriptorData );
+				LockGuard<SharedSpinLock> lock( conn.DescriptorData->Lock );
+				if( conn.DescriptorData->Fd == -1 )
 				{
-					err = RegisterNewDescriptor( new_conn );
-					if( !err )
-					{
-						conn.DescriptorData = conn.NewDescriptorStruct( new_conn );
-						MY_ASSERT( conn.DescriptorData );
-					}
-					else
+					err = InitAndRegisterNewDescriptor( new_conn, conn.DescriptorData );
+					MY_ASSERT( conn.DescriptorData );
+					MY_ASSERT( err || ( conn.DescriptorData->Fd == new_conn ) );
+					if( err )
 					{
 						// Ошибка привязки нового соединения к epoll-у
 						Error e;
-						CloseDescriptor( new_conn, e );
+						CloseDescriptor( conn.DescriptorData->Fd, e );
+						conn.DescriptorData->Fd = -1;
 					}
 				}
 				else

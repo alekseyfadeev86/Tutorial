@@ -276,9 +276,30 @@ void defer_test()
 	MY_CHECK_ASSERT( i == 2 );
 }
 
+void forsake_lock_test()
+{
+	LockWithForsake lock;
+	MY_CHECK_ASSERT( lock.TryLock( 1 ) );
+	MY_CHECK_ASSERT( !lock.TryLock( 2 ) );
+	MY_CHECK_ASSERT( !lock.TryLock( 7 ) );
+
+	uint32_t val = 0;
+	MY_CHECK_ASSERT( !lock.TryUnlock( val ) );
+	MY_CHECK_ASSERT( val == 7 );
+
+	MY_CHECK_ASSERT( lock.TryUnlock( val ) );
+	MY_CHECK_ASSERT( val == 1 );
+
+	MY_CHECK_ASSERT( lock.TryLock( 1 ) );
+	MY_CHECK_ASSERT( !lock.TryLock( 2 ) );
+	MY_CHECK_ASSERT( !lock.TryLock( 7 ) );
+	MY_CHECK_ASSERT( lock.ForcedUnlock() == 7 );
+} // void forsake_lock_test()
+
 void utils_tests()
 {
 	spin_lock_test();
 	guards_test();
 	defer_test();
+	forsake_lock_test();
 }

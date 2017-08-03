@@ -10,8 +10,6 @@ namespace Bicycle
 			// Задачи, отсортированные по времени сработки
 			std::map<time_type, std::vector<task_type>> tasks_map;
 
-			std::unique_lock<std::mutex> lock( Mut, std::defer_lock_t() );
-
 			while( RunFlag.load() )
 			{
 				// Считываем новые задачи, сортируем их по времени сработки
@@ -23,7 +21,19 @@ namespace Bicycle
 				}
 
 				bool timeout_expired = false;
-				lock.lock();
+				std::unique_lock<std::mutex> lock( Mut );
+				MY_ASSERT( lock );
+				if( !RunFlag.load() )
+				{
+					// Завершаем работу
+					break;
+				}
+				else if( Tasks )
+				{
+					// Появились новые задачи
+					continue;
+				}
+
 				if( tasks_map.empty() )
 				{
 					Cv.wait( lock );
@@ -85,10 +95,13 @@ namespace Bicycle
 			}
 
 			auto time_point = ClockType::now() + std::chrono::microseconds( timeout_microsec );
-			Tasks.Push( time_point, task );
-
-			std::lock_guard<std::mutex> lock( Mut );
-			Cv.notify_one();
+			if( Tasks.Push( time_point, task ) )
+			{
+				// Дёргаем condition_variable только, если добавили первый элемент
+				// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
+				std::lock_guard<std::mutex> lock( Mut );
+				Cv.notify_one();
+			}
 		} // void Timer::TimerThread::Post
 
 		std::shared_ptr<Timer::TimerThread> Timer::GetTimerThread()
@@ -147,7 +160,7 @@ namespace Bicycle
 
 			// Добавляем в поток таймера задачу
 			MY_ASSERT( SharedTimerPtr );
-			SharedTimerPtr->Post( [this, new_worker ]()
+			SharedTimerPtr->Post( [ this, new_worker ]()
 			{
 				MY_ASSERT( new_worker );
 				if( new_worker->Flag.exchange( true ) )

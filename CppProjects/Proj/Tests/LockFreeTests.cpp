@@ -84,7 +84,7 @@ namespace StackTest
 	void TestListUnsafe( const std::vector<T> &test_vec,
 	                     const std::function<bool( T )> &validator )
 	{
-		typename LockFree::ForwardList<T>::Unsafe ul;
+		typename LockFree::UnsafeForwardList<T> ul;
 		MY_CHECK_ASSERT( !ul );
 
 		std::vector<T> vec_to_compare;
@@ -123,7 +123,46 @@ namespace StackTest
 		}
 
 		TestStackEmpty( ul );
-	}
+
+		for( const auto &iter : test_vec )
+		{
+			ul.Push( iter );
+		}
+		MY_CHECK_ASSERT( ul.Reverse() == test_vec.size() );
+
+		size_t t = 0;
+		while( ul )
+		{
+			MY_CHECK_ASSERT( ul.Pop() == test_vec[ t++ ] );
+		}
+		MY_CHECK_ASSERT( t == test_vec.size() );
+
+		size_t sz = test_vec.size();
+		for( size_t t = 0; t < ( sz / 2 ); ++t )
+		{
+			ul.Push( test_vec[ t ] );
+		}
+
+		typename LockFree::ForwardList<T>::Unsafe ul2;
+		for( size_t t = sz / 2; t < sz; ++t )
+		{
+			ul2.Push( test_vec[ t ] );
+		}
+		ul.Push( std::move( ul2 ) );
+		MY_CHECK_ASSERT( !ul2 );
+
+		for( size_t t = ( sz - 1 );; --t )
+		{
+			MY_CHECK_ASSERT( ul );
+			MY_CHECK_ASSERT( ul.Pop() == test_vec[ t ] );
+
+			if( t == 0 )
+			{
+				break;
+			}
+		}
+		MY_CHECK_ASSERT( !ul );
+	} // void TestListUnsafe
 
 	template <typename T>
 	void TestLists( const std::vector<T> &test_vec,
@@ -295,8 +334,8 @@ void deferred_deleter_test()
 		}
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
-		// Захватываем эпоху, добавляем элементы на удаление, пробуем удалить
-		// ни одного элемента не должно быть удалено,т.к. эпоха захвачена
+		// Захватываем эпоху, добавляем элементы на удаление, пробуем удалить.
+		// Ни одного элемента не должно быть удалено,т.к. эпоха захвачена
 		auto epoch = def_queue.EpochAcquire();
 		for( uint16_t t = 0; t < MaxCount; ++t )
 		{
@@ -339,6 +378,31 @@ void deferred_deleter_test()
 				def_queue2.Delete( new LockFree::DebugStruct( t ) );
 			}
 		}
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+
+		DeferredDeleter def_queue3( 1, 2 );
+		auto epoch3 = def_queue3.EpochAcquire();
+		def_queue3.Delete( new LockFree::DebugStruct( 1 ) );
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 1 );
+		epoch3.Release();
+		def_queue3.ClearIfNeed();
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 1 );
+		epoch3 = def_queue3.EpochAcquire();
+		def_queue3.Delete( new LockFree::DebugStruct( 1 ) );
+		epoch3.Release();
+		def_queue3.ClearIfNeed();
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+
+		epoch3 = def_queue3.EpochAcquire();
+		for( uint8_t t = 0; t < 3; ++t )
+		{
+			def_queue3.Delete( new LockFree::DebugStruct( 1 ) );
+		}
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 3 );
+		def_queue3.Clear();
+		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 3 );
+		def_queue3.UpdateEpoch( epoch3 );
+		def_queue3.Clear();
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	} // if( !Checked.exchange( true ) )
 
@@ -459,7 +523,7 @@ void stack_test()
 	if( !Checked.exchange( true ) )
 	{
 		// Однопоточная проверка
-		Stack<LockFree::DebugStruct> stack( 1 );
+		Stack<LockFree::DebugStruct> stack( 1, 0 );
 		test_stack_empty( stack );
 
 		stack.Push( 1 );
@@ -484,7 +548,7 @@ void stack_test()
 
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
-			Stack<LockFree::DebugStruct> stack2( 1 );
+			Stack<LockFree::DebugStruct> stack2( 1, 0 );
 			stack2.Push( 1 );
 			stack2.Push( LockFree::DebugStruct( 2 ) );
 			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
@@ -496,7 +560,7 @@ void stack_test()
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	static const uint8_t ThreadsNum( 10 );
 	static const uint16_t OneThreadOpsNum( 10 );
-	Stack<LockFree::DebugStruct> stack( ThreadsNum );
+	Stack<LockFree::DebugStruct> stack( ThreadsNum, 0 );
 	std::vector<uint16_t> readed_values[ ThreadsNum ];
 	std::atomic<uint8_t> N( 0 );
 
@@ -553,6 +617,10 @@ void stack_test()
 	{
 		th.join();
 	}
+	
+	// Некоторые элементы стека могли остаться неудалёнными
+	// в очереди на отложенное удаление
+	stack.CleanDeferredQueue();
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	std::map<uint16_t, uint8_t> m;
@@ -659,6 +727,11 @@ void stack_test()
 
 	MY_CHECK_ASSERT( counter.load() == 1 );
 	MY_ASSERT( threads_work.load() == 0 );
+	
+	// Некоторые элементы стека могли остаться неудалёнными
+	// в очереди на отложенное удаление
+	stack.CleanDeferredQueue();
+	
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 
 	run.store( false );
@@ -730,6 +803,10 @@ void stack_test()
 	
 	MY_ASSERT( threads_work.load() == 0 );
 	MY_CHECK_ASSERT( counter.load() == 0 );
+	
+	// Некоторые элементы стека могли остаться неудалёнными
+	// в очереди на отложенное удаление
+	stack.CleanDeferredQueue();
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 } // void stack_test()
 
@@ -740,7 +817,7 @@ void queue_test()
 	if( !Checked.exchange( true ) )
 	{
 		// Однопоточная проверка
-		Queue<LockFree::DebugStruct> queue( 1 );
+		Queue<LockFree::DebugStruct> queue( 1, 0 );
 		auto elem_ptr = queue.Pop();
 		MY_CHECK_ASSERT( !elem_ptr );
 
@@ -761,7 +838,7 @@ void queue_test()
 
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
-			Queue<LockFree::DebugStruct> queue2( 1 );
+			Queue<LockFree::DebugStruct> queue2( 1, 0 );
 			queue2.Push( 1 );
 			queue2.Push( LockFree::DebugStruct( 2 ) );
 			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
@@ -773,7 +850,7 @@ void queue_test()
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 	static const uint8_t ThreadsNum( 10 );
 	static const uint16_t OneThreadOpsNum( 10 );
-	Queue<LockFree::DebugStruct> queue( ThreadsNum );
+	Queue<LockFree::DebugStruct> queue( ThreadsNum, 0 );
 	std::vector<uint16_t> readed_values[ ThreadsNum ];
 	std::atomic<uint8_t> N( 0 );
 
@@ -871,17 +948,18 @@ void lock_free_tests()
 #ifdef _DEBUG
 #ifdef _WIN32
 	printf( "Lockfree containers testing\n" );
-//	printf( "Press enter to begin\n" );
 #else
 	printf( "Проверка неблокирующих контейнеров\n" );
-//	printf( "Нажмите enter, чтобы начать\n" );
 #endif
 	fflush( stdout );
-//	getchar();
 #endif
 
 	//for( uint16_t t = 0; t < 1000; ++t )
+#ifdef _WIN32
+	for( uint16_t t = 0; t < 0x10; ++t )
+#else
 	for( uint16_t t = 0; t < 0x100; ++t )
+#endif
 	{
 #ifdef _DEBUG
 		if( ( t % 10 ) == 0 )

@@ -1,4 +1,5 @@
 #include "Utils.hpp"
+#include <stdexcept>
 
 namespace Bicycle
 {
@@ -89,5 +90,60 @@ namespace Bicycle
 				break;
 			}
 		} // while( 1 )
+	}
+
+	//------------------------------------------------------------------------------
+
+	LockWithForsake::LockWithForsake(): Mask( 0 ) {}
+
+	bool LockWithForsake::TryLock( uint32_t mask )
+	{
+		if( mask == 0 )
+		{
+			throw std::invalid_argument( "Mask cannot be zero" );
+		}
+
+		const uint64_t m = mask;
+		uint64_t expected = 0;
+		uint64_t val = 0;
+
+		while( true )
+		{
+			val = ( expected == 0 ) ? ( m << 32 ) : expected;
+			if( Mask.compare_exchange_weak( expected, val | m ) )
+			{
+				return expected == 0;
+			}
+		}
+
+		return false;
+	} // bool LockWithForsake::TryLock( uint32_t mask )
+
+	bool LockWithForsake::TryUnlock( uint32_t &mask )
+	{
+		uint64_t cur_mask = Mask.load();
+		uint64_t init_mask = 0;
+		uint64_t state_mask = 0;
+		uint64_t val = 0;
+
+		while( true )
+		{
+			init_mask  = cur_mask >> 32;
+			state_mask = 0xFFFFFFFF & cur_mask;
+			val = ( init_mask == state_mask ) ? 0 : ( ( init_mask << 32 ) | init_mask );
+
+			if( Mask.compare_exchange_weak( cur_mask, val ) )
+			{
+				mask = ( uint32_t ) state_mask;
+				return val == 0;
+			}
+		}
+
+		return false;
+	} // bool LockWithForsake::TryUnlock( uint64_t &mask )
+
+	uint32_t LockWithForsake::ForcedUnlock()
+	{
+		return 0xFFFFFFFF & Mask.exchange( 0 );
 	}
 } // namespace Bicycle

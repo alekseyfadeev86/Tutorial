@@ -12,10 +12,11 @@ namespace Bicycle
 				std::atomic<uint64_t> QueueLength;
 
 				/// Очередь сопрограмм на владение мьютксом
-				LockFree::Queue<Coroutine*> LockWaiters;
+				LockFree::DigitsQueue LockWaiters;
 
 			public:
 				Mutex();
+				~Mutex();
 
 				/// Захват мьютекса
 				void Lock();
@@ -34,28 +35,29 @@ namespace Bicycle
 				std::atomic<uint64_t> StateFlag;
 
 				/// Очередь сопрограмм на монопольное владение мьютксом
-				LockFree::Queue<Coroutine*> LockWaiters;
+				LockFree::DigitsQueue LockWaiters;
 
 				/// Очередь сопрограмм на разделяемое владение мьютксом
-				LockFree::Queue<Coroutine*> SharedLockWaiters;
+				LockFree::DigitsQueue SharedLockWaiters;
 
 				/// "Пробуждение" первой сопрограммы из очереди
 				void AwakeCoro( bool for_unique_lock, bool by_push );
 
 			public:
 				SharedMutex();
-
-				/// Захват монопольной блокировки
-				void Lock();
-
+				~SharedMutex();
+				
 				/// Попытка захвата монопольной блокировки
 				bool TryLock();
 
-				/// Захват разделяемой блокировки
-				void SharedLock();
-
+				/// Захват монопольной блокировки
+				void Lock();
+				
 				/// Попытка захвата разделяемой блокировки
 				bool TrySharedLock();
+
+				/// Захват разделяемой блокировки
+				void SharedLock();
 
 				/// Освобождение блокировки
 				void Unlock();
@@ -68,7 +70,7 @@ namespace Bicycle
 				std::atomic<uint64_t> Counter;
 
 				/// Очередь ожидающих сопрограмм
-				LockFree::Queue<Coroutine*> Waiters;
+				LockFree::DigitsQueue Waiters;
 
 				/// Попытка уменьшения счётчика на 1 (его значение не может быть < 0)
 				bool TryDecrement();
@@ -78,10 +80,11 @@ namespace Bicycle
 				 * Service задачу перехода к сопрограмме
 				 * @param ptr элемент очереди Waiters
 				 */
-				void AwakeCoro( std::unique_ptr<Coroutine*> &&ptr );
+				void AwakeCoro( Coroutine *coro_ptr );
 
 			public:
 				Semaphore();
+				~Semaphore();
 
 				/// Увеличение счётчика на 1
 				void Push();
@@ -97,10 +100,11 @@ namespace Bicycle
 				std::atomic<int64_t> StateFlag;
 
 				/// Очередь ожидающих сопрограмм
-				LockFree::Queue<Coroutine*> Waiters;
+				LockFree::DigitsQueue Waiters;
 
 			public:
 				Event();
+				~Event();
 
 				/// Установка события в активное состояние
 				void Set();

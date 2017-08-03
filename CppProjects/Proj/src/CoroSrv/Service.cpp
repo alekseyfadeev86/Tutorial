@@ -66,21 +66,22 @@ namespace Bicycle
 
 		void Service::OnDescriptorRemove()
 		{
-			++DescriptorsDeleteCount;
+			if( ( ++DescriptorsDeleteCount % 0x100 ) == 0 )
+			{
+				NeedToClearDescriptors.store( true );
+			}
 		} // void Service::OnDescriptorRemove()
 
 		void Service::RemoveClosedDescriptors()
 		{
-			if( DescriptorsDeleteCount.load() < DescriptorsRemovePeriod )
+			if( !NeedToClearDescriptors.exchange( false ) )
 			{
 				return;
 			}
 
-			MY_ASSERT( DescriptorsDeleteCount.load() >= DescriptorsRemovePeriod );
-			DescriptorsDeleteCount.store( 0 );
-
 			// Удаляем указатели на закрытые дескрипторы из Descriptors
 			auto desc = Descriptors.Release();
+			MY_ASSERT( desc );
 
 			desc.RemoveIf( []( const BaseDescWeakPtr &elem ) -> bool
 			{
@@ -171,9 +172,11 @@ namespace Bicycle
 		Service::Service(): MustBeStopped( true ),
 		                    CoroCount( 0 ),
 		                    WorkThreadsCount( 0 ),
-		                    DescriptorsDeleteCount( 0 )
+							DescriptorsDeleteCount( 0 ),
+							NeedToClearDescriptors( false )
 #ifndef _WIN32
-		                    , DeleteQueue( 0xFF )
+							, DeleteQueue( 0xFF, 0x100 ),
+							CoroListNum( 0 )
 #endif
 		{
 			RunFlag.clear();
@@ -214,9 +217,6 @@ namespace Bicycle
 			}
 
 			MustBeStopped.store( false );
-#ifndef _WIN32
-			MY_ASSERT( CoroutinesToExeceute.empty() );
-#endif
 
 			return true;
 		} // bool Service::Restart()
@@ -244,14 +244,14 @@ namespace Bicycle
 			MY_ASSERT( CoroCount.load() == 0 );
 
 #ifndef _WIN32
-			MY_ASSERT( CoroutinesToExeceute.empty() || ( ( CoroutinesToExeceute.front() == nullptr ) && ( CoroutinesToExeceute.size() == 1 ) ) );
-			CoroutinesToExeceute.clear();
 			char buf[ 100 ] = { 0 };
 			int read_res = -1;
 			for( Error err; err.Code != EAGAIN; err = GetLastSystemError() )
 			{
 				read_res = read( PostPipe[ 0 ], buf, sizeof( buf ) );
 			}
+
+			DeleteQueue.Clear();
 #endif
 
 			RunFlag.clear();
@@ -501,14 +501,6 @@ namespace Bicycle
 			Close( err );
 			ThrowIfNeed( err );
 		}
-
-		BasicDescriptor::BasicDescriptor(): AbstractCloser(),
-#ifdef _WIN32
-		                                    Fd( INVALID_HANDLE_VALUE )
-#else
-		                                    DescriptorData( nullptr )
-#endif
-		{}
 
 		BasicDescriptor::~BasicDescriptor()
 		{

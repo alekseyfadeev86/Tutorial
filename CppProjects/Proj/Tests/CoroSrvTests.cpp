@@ -42,9 +42,7 @@ void check_coros()
 		const uint8_t n = N++;
 		tids[ n ] = GetCurrentThreadId();
 		MY_CHECK_ASSERT( GetCurrentCoro() != nullptr );
-
-		//printf( "%i\n", GetCurrentThreadId() );
-		//fflush( stdout );
+		
 		if( ( n % 2 ) == 0 )
 		{
 			std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
@@ -56,16 +54,12 @@ void check_coros()
 			const uint8_t n = N++;
 			tids[ n ] = GetCurrentThreadId();
 			MY_CHECK_ASSERT( GetCurrentCoro() != nullptr );
-
-			//printf( "%i\n", GetCurrentThreadId() );
-			//fflush( stdout );
-
 			++FinishedCoros;
 		};
 		auto err = Go( coro_task2 );
 		MY_CHECK_ASSERT( !err );
 		++FinishedCoros;
-	};
+	}; // auto coro_task = [ & ]()
 
 	Service srv;
 	MY_CHECK_ASSERT( srv.Restart() );
@@ -82,23 +76,12 @@ void check_coros()
 	auto h = [ &srv ]
 	{
 		try
-		{
-			srv.Run();
-		}
+		{ srv.Run(); }
 		catch( ... )
-		{
-			MY_CHECK_ASSERT( false );
-		}
+		{ MY_CHECK_ASSERT( false ); }
 	};
-	for( auto &th : threads )
-	{
-		th = std::thread( h );
-	}
-
-	for( auto &th : threads )
-	{
-		th.join();
-	}
+	for( auto &th : threads ) { th = std::thread( h ); }
+	for( auto &th : threads ) { th.join(); }
 
 	MY_CHECK_ASSERT( srv.Stop() );
 	MY_CHECK_ASSERT( !srv.Stop() );
@@ -107,11 +90,10 @@ void check_coros()
 	MY_CHECK_ASSERT( FinishedCoros.load() == ( int64_t ) 2*Count );
 
 	std::set<int64_t> th_ids;
-	for( int64_t id : tids )
-	{
-		th_ids.insert( id );
-	}
-	MY_CHECK_ASSERT( th_ids.size() == ThreadsNum );
+	for( int64_t id : tids ) { th_ids.insert( id ); }
+
+	MY_CHECK_ASSERT( th_ids.size() > 1 );
+	MY_CHECK_ASSERT( th_ids.size() <= ThreadsNum );
 } // void check_coros()
 
 void check_cancel()
@@ -370,7 +352,7 @@ void check_udp_sock( bool single_thread )
 				cbuf.second = res;
 				res = reader->SendTo( cbuf, sender_addr, err );
 				MY_CHECK_ASSERT( ( res == 0 ) == ( bool ) err );
-				MY_CHECK_ASSERT( res <= 100 );
+				MY_CHECK_ASSERT( res == cbuf.second );
 
 				if( err )
 				{
@@ -380,7 +362,7 @@ void check_udp_sock( bool single_thread )
 			}
 
 			MY_CHECK_ASSERT( !reader->IsOpen() );
-		};
+		}; // std::function<void()> read_task = [ reader ]()
 
 		for( uint8_t t = 0; t < 10; ++t )
 		{
@@ -445,7 +427,7 @@ void check_udp_sock( bool single_thread )
 				reader->Close( err );
 				MY_CHECK_ASSERT( !err );
 			}
-		};
+		}; // std::function<void( uint16_t )> send_task
 		reader.reset();
 
 		const uint16_t reader_port = reader_addr.GetPortNum();
@@ -455,7 +437,7 @@ void check_udp_sock( bool single_thread )
 			err = Go( [ send_task, port_number ]() { send_task( port_number ); } );
 			MY_CHECK_ASSERT( !err );
 		}
-	});
+	}); // auto err = srv.AddCoro( [ senders_count, &senders_finished ]()
 	MY_CHECK_ASSERT( !err );
 
 	const uint8_t threads_num = single_thread ? 1 : 4;
@@ -972,7 +954,7 @@ void coro_service_tests()
 		printf( "Step %i of %i\n", t, steps_num );
 		fflush( stdout );
 #endif
-
+		
 		check_coros();
 		check_cancel();
 		check_stop();

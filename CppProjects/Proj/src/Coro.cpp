@@ -52,6 +52,12 @@ namespace Bicycle
 
 		//-----------------------------------------------------------------------------------------
 
+		/// Флаг "Сопрограмма выполняется"
+		const uint8_t InProgressFlag = 1;
+		
+		/// Флаг "Сопрограмма завершена"
+		const uint8_t FinishedFlag = 2;
+		
 		struct CoroInfo
 		{
 			/// Указатель на выполняемую в данный момент сопрограмму
@@ -87,7 +93,7 @@ namespace Bicycle
 		void Coroutine::CoroutineFunc( void *param )
 #endif
 		{
-			auto task_coro_ptr = ( std::pair<CoroTaskType, Coroutine*>* ) param;
+			auto task_coro_ptr = ( coro_func_params_t* ) param;
 
 			MY_ASSERT( task_coro_ptr != nullptr );
 			MY_ASSERT( task_coro_ptr->second != nullptr );
@@ -105,8 +111,8 @@ namespace Bicycle
 			if( cur_coro != nullptr )
 			{
 				// Сбрасываем флаг "занятости" предыдущей сопрограммы
-				MY_ASSERT( cur_coro->StateFlag.load() <= 3 );
-				cur_coro->StateFlag &= 0xFE;
+				MY_ASSERT( ( cur_coro->StateFlag.load() & ~( InProgressFlag | FinishedFlag ) ) == 0 );
+				cur_coro->StateFlag &= ~InProgressFlag;
 			}
 
 			info->CurrentCoro = task_coro_ptr->second;
@@ -115,7 +121,7 @@ namespace Bicycle
 			Coroutine *new_coro = task_coro_ptr->first ? task_coro_ptr->first() : nullptr;
 
 			// Помечаем сопрограмму как выполненную
-			task_coro_ptr->second->StateFlag |= 0x2;
+			task_coro_ptr->second->StateFlag |= FinishedFlag;
 
 			MY_ASSERT( new_coro != nullptr );
 			if( new_coro != nullptr )
@@ -161,9 +167,9 @@ namespace Bicycle
 			Internal.Set( ( void* ) new_coro_info );
 			MY_ASSERT( Internal.Get() == ( void* ) new_coro_info );
 
-			// Помечаем текущую сопрограмму как занятую
-			StateFlag.store( 1 );
-		}
+			// Помечаем текущую сопрограмму как выполняющуюся в данный момент
+			StateFlag.store( InProgressFlag );
+		} // Coroutine::Coroutine()
 
 		inline size_t EditStackSize( size_t stack_sz )
 		{
@@ -184,6 +190,7 @@ namespace Bicycle
 		{
 			if( !task )
 			{
+				MY_ASSERT( false );
 				throw std::invalid_argument( "Incorrect coroutine task" );
 			}
 
@@ -204,22 +211,23 @@ namespace Bicycle
 			}
 
 			// Создаём новый контекст
-			Context.uc_stack.ss_sp = Stack.Ptr;
+			Context.uc_stack.ss_sp   = Stack.Ptr;
 			Context.uc_stack.ss_size = Stack.Sz;
-			Context.uc_link = nullptr;
+			Context.uc_link = nullptr; // Куда передаётся управление после завершения работы
 			makecontext( &Context, ( void(*)() ) &CoroutineFunc, 1, &CoroFuncParams );
 #endif
-		}
+		} // Coroutine::Coroutine
 
 		Coroutine::~Coroutine()
 		{
-			const uint8_t state_flag = StateFlag.exchange( 2 );
+			const uint8_t state_flag = StateFlag.exchange( FinishedFlag );
 
 			CoroInfo *coro_info = ( CoroInfo* ) Internal.Get();
 
+			// Удаляемая сопрограмма - та, что выполняется сейчас
 			const bool is_cur_coro = ( coro_info != nullptr ) && ( coro_info->CurrentCoro == this );
 
-			MY_ASSERT( is_cur_coro == ( ( 1 & state_flag ) == 1 ) );
+			MY_ASSERT( is_cur_coro == ( ( InProgressFlag & state_flag ) == InProgressFlag ) );
 
 #ifdef _WIN32
 			MY_ASSERT( FiberPtr != nullptr );
@@ -229,8 +237,8 @@ namespace Bicycle
 
 			if( CreatedFromThread )
 			{
-				// Удаляемая сопрограмма получена из потока
-				MY_ASSERT( state_flag < 2 );
+				// Удаляемая сопрограмма получена из потока ("основная" сопрограмма)
+				MY_ASSERT( state_flag < FinishedFlag );
 				MY_ASSERT( coro_info != nullptr );
 				if( !is_cur_coro )
 				{
@@ -240,18 +248,21 @@ namespace Bicycle
 					std::terminate();
 				}
 
+				// Удаляем "основную" сопрограмму во время выполнения её самой
+				// (в итоге сопрограмма продолжит работу как поток)
 				Internal.Set( nullptr );
 				delete coro_info;
 
 #ifdef _WIN32
 				// Преобразуем волокно в поток
 				BOOL res = ConvertFiberToThread();
-				MY_ASSERT( res != 0 );
+				MY_ASSERT( res != FALSE );
 #endif
 			}
 			else
 			{
-				if( Started && ( state_flag != 2 ) )
+				// Удаляемая сопрограмма создана не из потока (не "основная" сопрограмма)
+				if( Started && ( state_flag != FinishedFlag ) )
 				{
 					// Пытаемся удалить запущенную, но незавершённую сопрограмму
 					MY_ASSERT( false );
@@ -273,6 +284,7 @@ namespace Bicycle
 			if( cur_coro == nullptr )
 			{
 				// Пытаемся перейти из потока в сопрограмму
+				MY_ASSERT( coro_info == nullptr );
 				throw Exception( ErrorCodes::FromThreadToCoro,
 				                 "Cannot jump from thread to coroutine" );
 			}
@@ -288,8 +300,9 @@ namespace Bicycle
 				return true;
 			}
 
+			// Считаем, что сопрограмма не выполняется и не была завершена
 			uint8_t cur_state = 0;
-			if( !StateFlag.compare_exchange_strong( cur_state, 1 ) )
+			if( !StateFlag.compare_exchange_strong( cur_state, InProgressFlag ) )
 			{
 				// Сопрограмма уже выполняется или завершена
 				return false;
@@ -317,14 +330,16 @@ namespace Bicycle
 			// !!! Если попали сюда, то контекст другой:
 			// this и остальные локальные переменные имеют неизвестные значения !!!
 			coro_info = ( CoroInfo* ) Internal.Get();
-			cur_coro = coro_info != nullptr ? coro_info->CurrentCoro : nullptr;
 			MY_ASSERT( coro_info != nullptr );
+			
+			cur_coro = coro_info->CurrentCoro;
 			MY_ASSERT( cur_coro != coro_info->NextCoro );
 			MY_ASSERT( cur_coro != nullptr );
 
 			// Сбрасываем у предыдущей сопрограммы флаг "сопрограмма работает"
-			cur_coro->StateFlag &= 0xFE;
+			cur_coro->StateFlag &= ~InProgressFlag;
 
+			// Запоминаем указатель на текущую сопрограмму
 			coro_info->CurrentCoro = coro_info->NextCoro;
 			coro_info->NextCoro = nullptr;
 
@@ -337,7 +352,7 @@ namespace Bicycle
 
 		bool Coroutine::IsDone() const
 		{
-			return StateFlag.load() == 2;
+			return StateFlag.load() == FinishedFlag;
 		}
 
 		Coroutine* GetCurrentCoro()

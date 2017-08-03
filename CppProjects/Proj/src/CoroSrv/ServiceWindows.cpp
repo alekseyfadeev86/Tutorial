@@ -203,6 +203,10 @@ namespace Bicycle
 			return err;
 		}
 
+		BasicDescriptor::BasicDescriptor(): AbstractCloser(),
+		                                    Fd( INVALID_HANDLE_VALUE )
+		{}
+
 		void BasicDescriptor::Open( Error &err )
 		{
 			if( SrvRef.MustBeStopped.load() )

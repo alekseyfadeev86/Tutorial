@@ -1,8 +1,8 @@
 package main
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -21,26 +21,41 @@ func main() {
 	var StepsNum int = 10000
 	var ConnectionsNum int = 1000
 
-	if len(os.Args) < 3 {
-		fmt.Println("Мало аргументов: нужны хост и порт сервера")
+	l := len(os.Args)
+	if l < 3 {
+		fmt.Println("Аргументы: хост сервера, порт сервера [, кол-во отправок по каждому соединению, кол-во соединений]")
 		return
 	}
 
-	ip := os.Args[ 1 ]
-	port, err := strconv.Atoi(os.Args[ 2 ])
+	ip := os.Args[1]
+	port, err := strconv.Atoi(os.Args[2])
 	if err != nil {
-		fmt.Println( err.Error() )
+		fmt.Println(err.Error())
 		return
 	}
+
+	if l > 3 {
+		i, e := strconv.Atoi(os.Args[3])
+		if e == nil {
+			StepsNum = i
+		} // if e == nil
+
+		if l > 4 {
+			i, e = strconv.Atoi(os.Args[4])
+			if e == nil {
+				ConnectionsNum = i
+			}
+		}
+	} // if l > 2
 
 	var wg sync.WaitGroup
 
 	t0 := time.Now()
 	for n := 0; n < ConnectionsNum; n++ {
-		wg.Add( 1 )
-		go func(){
+		wg.Add(1)
+		go func() {
 			defer wg.Done()
-			test_connect( ip, int( port ), StepsNum )
+			test_connect(ip, int(port), StepsNum)
 		}()
 
 		/*if ( n % 200 ) == 0 {
@@ -49,7 +64,7 @@ func main() {
 	}
 
 	wg.Wait()
-	fmt.Printf( "Прошло %d миллисекунд на %d соединений и %d отправок по каждому\n",
-	             int( time.Since( t0 ) ) / 1000000, ConnectionsNum, StepsNum )
+	fmt.Printf("Прошло %d миллисекунд на %d соединений и %d отправок по каждому\n",
+		int(time.Since(t0))/1000000, ConnectionsNum, StepsNum)
 	return
 }

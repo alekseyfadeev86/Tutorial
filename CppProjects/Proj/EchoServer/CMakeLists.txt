@@ -6,7 +6,7 @@ set( SRC_DIR ../src )
 
 include_directories( . ${INCLUDE_DIR} )
 
-# Подцепляем вссе нужные файлы
+# Подцепляем все нужные файлы
 set( SRC_LIST )
 set( SRC_LIST ${SRC_LIST} ${INCLUDE_DIR}/LockFree.hpp )
 set( SRC_LIST ${SRC_LIST} ${SRC_DIR}/Errors.cpp ${INCLUDE_DIR}/Errors.hpp )
@@ -23,7 +23,9 @@ set( ADDITIONAL_FLAGS_RELEASE )
 
 if( UNIX )
         set( ADDITIONAL_FLAGS "${ADDITIONAL_FLAGS} -std=c++11 -pthread -D_GLIBCXX_USE_NANOSLEEP -D_GLIBCXX_USE_SCHED_YIELD" )
-	set( ADDITIONAL_FLAGS_DEBUG "${ADDITIONAL_FLAGS_DEBUG} -g3 -Wall -W -D_DEBUG " )
+        set( ADDITIONAL_FLAGS_DEBUG "${ADDITIONAL_FLAGS_DEBUG} -g3 -Wall -W -D_DEBUG " )
+        # Строка ниже нужна для отладки в долбаном QtCreator-е убунты
+        #set( ADDITIONAL_FLAGS "${ADDITIONAL_FLAGS} -g3 -Wall -W -D_DEBUG " )
 	set( SRC_LIST ${SRC_LIST} ${SRC_DIR}/CoroSrv/ServiceLinux.cpp )
 	set( SRC_LIST ${SRC_LIST} ${SRC_DIR}/CoroSrv/InetLinux.cpp )
 elseif( MSVC )

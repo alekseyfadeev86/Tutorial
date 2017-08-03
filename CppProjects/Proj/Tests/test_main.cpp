@@ -1,7 +1,7 @@
 #include "Tests.hpp"
 
 int main( int argc, char *argv[] )
-{
+{	
 	printf( "%s\n", "Start..." );
 	fflush( stdout );
 
@@ -25,7 +25,7 @@ int main( int argc, char *argv[] )
 	fflush( stdout );
 	coro_service_tests();
 
-	printf( "Done\n%s", "Success" );
+	printf( "Done\n%s\n", "Success" );
 
 	return 0;
 }
