@@ -704,7 +704,8 @@ namespace LockFree
 			                 uint16_t del_period = 0 ): CurrentEpoch( 1 ),
 			                                            Epochs( threads_num > 0 ? threads_num : 1 ),
 			                                            DelCount( 0 ), EpochsCounter( 0 ),
-			                                            DelPeriod( del_period == 0 ? 1 : del_period )
+			                                            DelPeriod( del_period == 0 ? 1 : del_period ),
+			                                            NeedToClean( false )
 			{
 				MY_ASSERT( Epochs.size() > 0 );
 				for( auto &iter : Epochs )

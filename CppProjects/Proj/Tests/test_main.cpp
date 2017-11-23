@@ -1,7 +1,7 @@
 #include "Tests.hpp"
 
 int main( int argc, char *argv[] )
-{	
+{
 	printf( "%s\n", "Start..." );
 	fflush( stdout );
 

@@ -9,7 +9,11 @@ namespace Bicycle
 		{
 #ifdef _WIN32
 			Key = TlsAlloc();
-			ThrowIfNeed();
+			if( Key == TLS_OUT_OF_INDEXES )
+			{
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
 #else
 			ThrowIfNeed( GetSystemErrorByCode( pthread_key_create( &Key, nullptr ) ) );
 #endif
@@ -18,8 +22,8 @@ namespace Bicycle
 		ThreadLocal::~ThreadLocal()
 		{
 #ifdef _WIN32
-			TlsFree( Key );
-			MY_ASSERT( GetLastError() == 0 );
+			BOOL res = TlsFree( Key );
+			MY_ASSERT( res != 0 );
 #else
 			int res = pthread_key_delete( Key );
 			MY_ASSERT( res == 0 );
@@ -32,7 +36,11 @@ namespace Bicycle
 
 #ifdef _WIN32
 			res = TlsGetValue( Key );
-			ThrowIfNeed();
+			if( res == 0 )
+			{
+				// Возможно ошибка, а возможно, там просто хранится 0
+				ThrowIfNeed();
+			}
 #else
 			res = pthread_getspecific( Key );
 #endif
@@ -43,8 +51,11 @@ namespace Bicycle
 		void ThreadLocal::Set( void *ptr )
 		{
 #ifdef _WIN32
-			TlsSetValue( Key, ptr );
-			ThrowIfNeed();
+			if( TlsSetValue( Key, ptr ) == FALSE )
+			{
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
 #else
 			ThrowIfNeed( pthread_setspecific( Key, ptr ) );
 #endif
@@ -149,7 +160,10 @@ namespace Bicycle
 #ifdef _WIN32
 			// Преобразуем текущий поток в волокно
 			FiberPtr = ConvertThreadToFiber( nullptr );
-			ThrowIfNeed();
+			if( FiberPtr == NULL )
+			{
+				ThrowIfNeed();
+			}
 			MY_ASSERT( FiberPtr != nullptr );
 #else
 			if( getcontext( &Context ) != 0 )
@@ -200,7 +214,10 @@ namespace Bicycle
 #ifdef _WIN32
 			// Создаём новое волокно
 			FiberPtr = CreateFiber( EditStackSize( stack_sz ), &CoroutineFunc, &CoroFuncParams );
-			ThrowIfNeed();
+			if( FiberPtr == NULL )
+			{
+				ThrowIfNeed();
+			}
 			MY_ASSERT( FiberPtr != nullptr );
 #else
 			if( getcontext( &Context ) != 0 )

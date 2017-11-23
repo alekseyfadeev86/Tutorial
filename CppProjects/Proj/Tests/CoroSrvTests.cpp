@@ -474,13 +474,9 @@ void check_tcp( bool single_thread )
 	using namespace ErrorCodes;
 
 	const uint8_t ConnectionsNum = 10;
-	static std::atomic<uint16_t> PortNumber( 40000 );
+	static std::atomic<uint16_t> PortNumber( 30000 );
 	std::atomic<int64_t> FinishedConns( 0 );
-#ifdef _WIN32
-	const uint16_t srv_port_num = PortNumber.load();
-#else
 	const uint16_t srv_port_num = ( PortNumber += ConnectionsNum );
-#endif
 
 	Service srv;
 	MY_CHECK_ASSERT( srv.Restart() );
@@ -874,6 +870,7 @@ void check_timer( bool single_thread )
 
 		timer.ExpiresAfter( 1000*1000, err );
 		MY_CHECK_ASSERT( !err );
+
 		for( uint8_t t = 0; t < 10; ++t )
 		{
 			err = Go( [ timer_ptr ]()
@@ -954,7 +951,7 @@ void coro_service_tests()
 		printf( "Step %i of %i\n", t, steps_num );
 		fflush( stdout );
 #endif
-		
+
 		check_coros();
 		check_cancel();
 		check_stop();
