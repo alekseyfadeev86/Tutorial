@@ -1,5 +1,6 @@
 #include "Utils.hpp"
 #include <stdexcept>
+#include <map>
 
 namespace Bicycle
 {
@@ -91,59 +92,154 @@ namespace Bicycle
 			}
 		} // while( 1 )
 	}
-
-	//------------------------------------------------------------------------------
-
-	LockWithForsake::LockWithForsake(): Mask( 0 ) {}
-
-	bool LockWithForsake::TryLock( uint32_t mask )
+	
+	//---------------------------------------------------------------------------------------------
+	
+	void CancellableTask::operator ()()
 	{
-		if( mask == 0 )
+		if( !WasCancelled.exchange( true ) )
 		{
-			throw std::invalid_argument( "Mask cannot be zero" );
+			MY_ASSERT( Task );
+			Task();
 		}
-
-		const uint64_t m = mask;
-		uint64_t expected = 0;
-		uint64_t val = 0;
-
-		while( true )
-		{
-			val = ( expected == 0 ) ? ( m << 32 ) : expected;
-			if( Mask.compare_exchange_weak( expected, val | m ) )
-			{
-				return expected == 0;
-			}
-		}
-
-		return false;
-	} // bool LockWithForsake::TryLock( uint32_t mask )
-
-	bool LockWithForsake::TryUnlock( uint32_t &mask )
-	{
-		uint64_t cur_mask = Mask.load();
-		uint64_t init_mask = 0;
-		uint64_t state_mask = 0;
-		uint64_t val = 0;
-
-		while( true )
-		{
-			init_mask  = cur_mask >> 32;
-			state_mask = 0xFFFFFFFF & cur_mask;
-			val = ( init_mask == state_mask ) ? 0 : ( ( init_mask << 32 ) | init_mask );
-
-			if( Mask.compare_exchange_weak( cur_mask, val ) )
-			{
-				mask = ( uint32_t ) state_mask;
-				return val == 0;
-			}
-		}
-
-		return false;
-	} // bool LockWithForsake::TryUnlock( uint64_t &mask )
-
-	uint32_t LockWithForsake::ForcedUnlock()
-	{
-		return 0xFFFFFFFF & Mask.exchange( 0 );
 	}
+	
+	CancellableTask::operator bool() const
+	{
+		return !WasCancelled.load();
+	}
+	
+	bool CancellableTask::Cancel()
+	{
+		return !WasCancelled.exchange( true );
+	}
+	
+	void TimeTasksQueue::ThreadFunc()
+	{
+		// Задачи, отсортированные по времени сработки
+		std::multimap<time_type, task_type> tasks_map;
+
+		while( RunFlag.load() )
+		{
+			// Считываем новые задачи, сортируем их по времени сработки
+			auto new_elems = Tasks.Release();
+			while( new_elems )
+			{
+				tasks_map.insert( new_elems.Pop() );
+			}
+			MY_ASSERT( !new_elems );
+
+			bool timeout_expired = false;
+			std::unique_lock<std::mutex> lock( Mut );
+			MY_ASSERT( lock );
+			if( !RunFlag.load() )
+			{
+				// Завершаем работу
+				break;
+			}
+			else if( Tasks )
+			{
+				// Появились новые задачи
+				continue;
+			}
+
+			// Удаляем отменённые задачи
+			if( !tasks_map.empty() )
+			{
+				const auto begin = tasks_map.begin();
+				auto remove_iter = begin;
+				for( auto end = tasks_map.end(); remove_iter != end; ++remove_iter )
+				{
+					if( *( remove_iter->second ) )
+					{
+						// Наткнулись на актуальную задачу
+						break;
+					}
+				}
+				
+				tasks_map.erase( begin, remove_iter );
+			}
+			
+			if( tasks_map.empty() )
+			{		
+				Cv.wait( lock );
+			}
+			else
+			{
+				const auto tp = tasks_map.begin()->first;
+				timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
+			}
+			lock.unlock();
+
+			if( timeout_expired )
+			{
+				// Сработка таймера
+				// Определяем текущее время и диапазон обрабатываемых элементов
+				// (время у которых не позже текущего)
+				const auto tp = ClockType::now();
+				const auto begin = tasks_map.begin();
+				const auto end = tasks_map.upper_bound( tp );
+
+				for( auto iter = begin; iter != end; ++iter )
+				{
+					MY_ASSERT( iter->first <= tp );
+					MY_ASSERT( iter->second );
+					( *iter->second )();
+				} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
+			
+				// Удаляем обработанные элементы
+				tasks_map.erase( begin, end );
+			} // if( timeout_expired )
+		} // while( RunFlag.load() )
+	} // void TimeTasksQueue::ThreadFunc()
+
+	TimeTasksQueue::TimeTasksQueue(): RunFlag( true )
+	{
+		WorkThread = std::thread( [ this ]() { ThreadFunc(); } );
+	}
+	
+	std::shared_ptr<TimeTasksQueue> TimeTasksQueue::GetQueue()
+	{
+		static std::mutex Mut;
+		static std::weak_ptr<TimeTasksQueue> WeakPtr;
+
+		std::lock_guard<std::mutex> lock( Mut );
+		auto res = WeakPtr.lock();
+		if( !res )
+		{
+			res.reset( new TimeTasksQueue );
+			WeakPtr = res;
+		}
+
+		MY_ASSERT( res );
+		return res;
+	}
+
+	TimeTasksQueue::~TimeTasksQueue()
+	{
+		RunFlag.store( false );
+		{
+			std::lock_guard<std::mutex> lock( Mut );
+			Cv.notify_all();
+		}
+		WorkThread.join();
+	}
+
+	void TimeTasksQueue::Post( const task_type &task,
+	                           uint64_t timeout_microsec )
+	{
+		if( !task || !( *task ) )
+		{
+			return;
+		}
+
+		auto time_point = ClockType::now() + std::chrono::microseconds( timeout_microsec );
+		if( Tasks.Push( time_point, task ) )
+		{
+			// Дёргаем condition_variable только, если добавили первый элемент
+			// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
+			std::lock_guard<std::mutex> lock( Mut );
+			Cv.notify_one();
+		}
+	} // void Timer::TimerThread::Post
 } // namespace Bicycle

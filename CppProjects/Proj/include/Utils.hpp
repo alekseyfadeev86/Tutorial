@@ -3,6 +3,10 @@
 #include <stdint.h>
 #include <atomic>
 #include <functional>
+#include <memory>
+#include <condition_variable>
+#include <thread>
+#include "LockFree.hpp"
 
 namespace Bicycle
 {
@@ -290,43 +294,87 @@ namespace Bicycle
 				return ( bool ) Task;
 			}
 	};
-
-	/// "Оставленная" блокировка
-	class LockWithForsake
+	
+	/// Отменяемая задача
+	class CancellableTask
 	{
 		private:
-			/// Битовая маска
-			std::atomic<uint64_t> Mask;
-
+			/// Задача
+			std::function<void()> Task;
+			
+			/// Показывает, была ли отменена задача
+			std::atomic<bool> WasCancelled;
+			
 		public:
-			LockWithForsake();
+			CancellableTask( const CancellableTask& ) = delete;
+			CancellableTask& operator=( const CancellableTask& ) = delete;
+			
+			template<typename ...Args>
+			CancellableTask( Args ...args ): Task( args... ),
+			                                 WasCancelled( !Task )
+			{
+				MY_ASSERT( ( bool ) Task != WasCancelled.load() );
+			}
+			
+			/**
+			 * @brief operator () потокобезопасное выполнение задачи:
+			 * только 1 поток выполнит задачу, если она не была
+			 * выполнена или отменена
+			 */
+			void operator()();
+			
+			/// Возвращает true, если задача не была отменена
+			operator bool() const;
+			
+			/**
+			 * @brief Cancel отмена задачи (потокобезопасная)
+			 * @return false, если задача уже была выполнена
+			 * или отменена
+			 */
+			bool Cancel();
+	};
+	
+	/// Класс очереди задач с указанием времени их выполнения
+	class TimeTasksQueue
+	{
+		public:
+			typedef std::shared_ptr<CancellableTask> task_type;
+			
+		private:
+			typedef std::chrono::system_clock ClockType;
+			
+			/// Флаг, показывающий, нужно ли продолжать работу
+			std::atomic<bool> RunFlag;
+
+			/// Рабочий поток
+			std::thread WorkThread;
+
+			std::condition_variable Cv;
+			std::mutex Mut;
+
+			typedef std::chrono::time_point<ClockType> time_type;
+			typedef std::pair<time_type, task_type> elem_type;
+
+			/// Задачи для таймера
+			LockFree::ForwardList<elem_type> Tasks;
+
+			/// Задача рабочего потока
+			void ThreadFunc();
+
+			TimeTasksQueue();
+			
+		public:
+			static std::shared_ptr<TimeTasksQueue> GetQueue();
+			
+			~TimeTasksQueue();
 
 			/**
-			 * @brief TryLock попытка захвата блокировки и
-			 * редактирование битовой маски (через битовое OR,
-			 * будет выполнено в любом случае)
-			 * @param mask накладываемое значение маски
-			 * @return true, если Mask имел нулевое значение
-			 * @throw std::invalid_argument, если mask == 0
+			 * @brief Post добавление задачи в очередь таймера
+			 * @param task задача
+			 * @param timeout_microsec время (в микросекундах)
+			 * спустя которое задача должна быть выполнена
 			 */
-			bool TryLock( uint32_t mask );
-
-			/**
-			 * @brief TryUnlock попытка снятия блокировки.
-			 * Если текущее значение маски равно значению при захвате блокировки,
-			 * её значение обнуляется (блокировка снимается), иначе маске
-			 * присваивается значение маски при блокировке,
-			 * а прежнее значение записывается в mask
-			 * (успех, если текущее значение маски равно начальному)
-			 * @param mask ссылка на буфер для текущего значения маски
-			 * @return успешность
-			 */
-			bool TryUnlock( uint32_t &mask );
-
-			/**
-			 * @brief ForcedUnlock снятие блокировки (обнуление маски)
-			 * @return прежнее значение маски
-			 */
-			uint32_t ForcedUnlock();
+			void Post( const task_type &task,
+			           uint64_t timeout_microsec );
 	};
 } // namespace Bicycle

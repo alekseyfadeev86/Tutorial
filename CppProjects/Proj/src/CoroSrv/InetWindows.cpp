@@ -79,8 +79,7 @@ namespace Bicycle
 		BasicSocket::BasicSocket()
 		{
 			WSADATA wsa_data;
-			Error err( GetSystemErrorByCode( WSAStartup( MAKEWORD( 2, 2 ), &wsa_data ) ) );
-			ThrowIfNeed( err );
+			ThrowIfNeed( GetSystemErrorByCode( WSAStartup( MAKEWORD( 2, 2 ), &wsa_data ) ) );
 		}
 
 		BasicSocket::~BasicSocket()

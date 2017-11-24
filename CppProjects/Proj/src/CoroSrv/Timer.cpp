@@ -8,7 +8,7 @@ namespace Bicycle
 		void Timer::TimerThread::ThreadFunc()
 		{
 			// Задачи, отсортированные по времени сработки
-			std::map<time_type, std::vector<task_type>> tasks_map;
+			std::multimap<time_type, task_type> tasks_map;
 
 			while( RunFlag.load() )
 			{
@@ -16,8 +16,7 @@ namespace Bicycle
 				auto new_elems = Tasks.Release();
 				while( new_elems )
 				{
-					elem_type elem = new_elems.Pop();
-					tasks_map[ elem.first ].push_back( std::move( elem.second ) );
+					tasks_map.insert( new_elems.Pop() );
 				}
 
 				bool timeout_expired = false;
@@ -40,7 +39,7 @@ namespace Bicycle
 				}
 				else
 				{
-					auto tp = tasks_map.begin()->first;
+					const auto tp = tasks_map.begin()->first;
 					timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
 				}
 				lock.unlock();
@@ -48,26 +47,22 @@ namespace Bicycle
 				if( timeout_expired )
 				{
 					// Сработка таймера
-					auto tp = ClockType::now();
-					while( !tasks_map.empty() )
+					// Определяем текущее время и диапазон обрабатываемых элементов
+					// (время у которых не позже текущего)
+					const auto tp = ClockType::now();
+					const auto begin = tasks_map.begin();
+					const auto end = tasks_map.upper_bound( tp );
+
+					for( auto iter = begin; iter != end; ++iter )
 					{
-						auto iter = tasks_map.begin();
-						if( iter->first > tp )
-						{
-							break;
-						}
+						MY_ASSERT( iter->first <= tp );
+						MY_ASSERT( iter->second );
+						iter->second();
+					} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
 
-						MY_ASSERT( iter != tasks_map.end() );
-						auto cur_tasks = std::move( iter->second );
-						tasks_map.erase( iter );
-
-						for( auto &one_task : cur_tasks )
-						{
-							MY_ASSERT( one_task );
-							one_task();
-						}
-					}
-				}
+					// Удаляем обработанные элементы
+					tasks_map.erase( begin, end );
+				} // if( timeout_expired )
 			} // while( RunFlag.load() )
 		} // void Timer::TimerThread::ThreadFunc()
 

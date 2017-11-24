@@ -276,30 +276,138 @@ void defer_test()
 	MY_CHECK_ASSERT( i == 2 );
 }
 
-void forsake_lock_test()
+void timer_test()
 {
-	LockWithForsake lock;
-	MY_CHECK_ASSERT( lock.TryLock( 1 ) );
-	MY_CHECK_ASSERT( !lock.TryLock( 2 ) );
-	MY_CHECK_ASSERT( !lock.TryLock( 7 ) );
-
-	uint32_t val = 0;
-	MY_CHECK_ASSERT( !lock.TryUnlock( val ) );
-	MY_CHECK_ASSERT( val == 7 );
-
-	MY_CHECK_ASSERT( lock.TryUnlock( val ) );
-	MY_CHECK_ASSERT( val == 1 );
-
-	MY_CHECK_ASSERT( lock.TryLock( 1 ) );
-	MY_CHECK_ASSERT( !lock.TryLock( 2 ) );
-	MY_CHECK_ASSERT( !lock.TryLock( 7 ) );
-	MY_CHECK_ASSERT( lock.ForcedUnlock() == 7 );
-} // void forsake_lock_test()
+	{
+		CancellableTask task1;
+		MY_CHECK_ASSERT( !task1 );
+		MY_CHECK_ASSERT( !task1.Cancel() );
+	
+		int64_t count = 0;
+		CancellableTask task2( [ &count ](){ ++count; } );
+		MY_CHECK_ASSERT( task2 );
+		task2();
+		MY_CHECK_ASSERT( count == 1 );
+		MY_CHECK_ASSERT( !task2 );
+		MY_CHECK_ASSERT( !task2.Cancel() );
+		task2();
+		MY_CHECK_ASSERT( count == 1 );
+		MY_CHECK_ASSERT( !task2 );
+		MY_CHECK_ASSERT( !task2.Cancel() );
+		
+		CancellableTask task3( [ &count ](){ ++count; } );
+		MY_CHECK_ASSERT( task3 );
+		MY_CHECK_ASSERT( task3.Cancel() );
+		MY_CHECK_ASSERT( !task3 );
+		MY_CHECK_ASSERT( !task3.Cancel() );
+		task3();
+		MY_CHECK_ASSERT( count == 1 );
+		MY_CHECK_ASSERT( !task3 );
+		MY_CHECK_ASSERT( !task3.Cancel() );
+	}
+	
+	auto timer_ptr = TimeTasksQueue::GetQueue();
+	MY_CHECK_ASSERT( timer_ptr );
+	
+	std::weak_ptr<TimeTasksQueue> timer_wptr( timer_ptr );
+	timer_ptr.reset();
+	MY_CHECK_ASSERT( !timer_ptr );
+	MY_CHECK_ASSERT( timer_wptr.expired() );
+	MY_CHECK_ASSERT( !timer_wptr.lock() );
+	
+	auto timer_ptr2 = TimeTasksQueue::GetQueue();
+	MY_CHECK_ASSERT( timer_ptr2 );
+	timer_wptr = timer_ptr2;
+	timer_ptr = TimeTasksQueue::GetQueue();
+	MY_CHECK_ASSERT( timer_ptr );
+	MY_CHECK_ASSERT( timer_ptr.get() == timer_ptr2.get() );
+	timer_ptr2.reset();
+	MY_CHECK_ASSERT( !timer_wptr.expired() );
+	
+	typedef std::chrono::system_clock clock_type;
+	
+	const clock_type::time_point t0 = clock_type::now();
+	
+	const uint8_t N( 3 );
+	clock_type::time_point tp[ N ];
+#ifdef _DEBUG
+	uint64_t microsec_timeouts[ N ] = { 1000*1000, 2000*1000, 3000*1000 };
+	//uint64_t microsec_timeouts[ N ] = { 1000*1000, 20*1000*1000, 300*000*1000 };
+#else
+#error "вернуть"
+	uint64_t microsec_timeouts[ N ] = { 1000*1000, 2000*1000, 3000*1000 };
+#endif
+	
+	std::mutex mut;
+	std::condition_variable cv;
+	uint8_t counter( 0 );
+	
+	auto task = [ &tp, &counter, &mut, &cv, N ]( uint8_t i )
+	{
+		tp[ i ] = clock_type::now();
+		
+		std::lock_guard<std::mutex> lock( mut );
+		if( ( ++counter ) == N )
+		{
+			cv.notify_all();
+		}
+	};
+	
+	typedef TimeTasksQueue::task_type task_type;
+	
+	for( uint8_t t = 0; t < N; ++t )
+	{
+		task_type task0( new CancellableTask( [ task, t ](){ task( t ); } ) );
+		std::weak_ptr<CancellableTask> task_wptr( task0 );
+		timer_ptr->Post( task0, microsec_timeouts[ t ] );
+		MY_CHECK_ASSERT( task0 );
+		task0.reset();
+		MY_CHECK_ASSERT( !task_wptr.expired() );
+	}
+	
+	bool chk = false;
+	task_type task1( new CancellableTask( [ &chk ](){ chk = true; } ) );
+	timer_ptr->Post( task1, 1500*1000 );
+	std::weak_ptr<CancellableTask> task_wptr( task1 );
+	MY_CHECK_ASSERT( task1->Cancel() );
+	task1.reset();
+	
+	{
+		std::unique_lock<std::mutex> lock( mut );
+		if( counter < N )
+		{
+			auto res = cv.wait_for( lock, std::chrono::seconds( 5 ) );
+			MY_CHECK_ASSERT( res != std::cv_status::timeout );
+		}
+	}
+	
+	MY_CHECK_ASSERT( task_wptr.expired() );
+	MY_CHECK_ASSERT( !chk );
+	for( uint8_t t = 0; t < N; ++t )
+	{
+		MY_CHECK_ASSERT( tp[ t ] > t0 );
+		
+		const uint64_t diff = std::chrono::duration_cast<std::chrono::microseconds>( tp[ t ] - t0 ).count();
+		MY_CHECK_ASSERT( diff >= ( microsec_timeouts[ t ] - 100*1000 ) );
+		MY_CHECK_ASSERT( diff <= ( microsec_timeouts[ t ] + 100*1000 ) );
+	}
+	
+	task1.reset( new CancellableTask( [ &chk ](){ chk = true; } ) );
+	task_wptr = task1;
+	MY_CHECK_ASSERT( !task_wptr.expired() );
+	timer_ptr->Post( task1, 1500*1000 );
+	task1.reset();
+	MY_CHECK_ASSERT( !task_wptr.expired() );
+	timer_wptr = timer_ptr;
+	timer_ptr.reset();
+	MY_CHECK_ASSERT( timer_wptr.expired() );
+	MY_CHECK_ASSERT( task_wptr.expired() );
+} // void timer_test()
 
 void utils_tests()
 {
 	spin_lock_test();
 	guards_test();
 	defer_test();
-	forsake_lock_test();
+	timer_test();
 }
