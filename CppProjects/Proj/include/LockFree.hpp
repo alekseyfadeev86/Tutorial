@@ -1046,6 +1046,11 @@ namespace LockFree
 			DigitsQueue( const DigitsQueue& ) = delete;
 			DigitsQueue& operator=( const DigitsQueue& ) = delete;
 
+			/**
+			 * @brief DigitsQueue Конструктор очереди чисел
+			 * @param fake_value фиктивное значение (не может присутствовать в очереди)
+			 * @param def_deleter ссылка на очередь на отложенное удаление
+			 */
 			DigitsQueue( Type fake_value,
 			             DeferredDeleter &def_deleter ): FakeValue( fake_value ),
 			                                             Head( nullptr ), Tail( nullptr ),
@@ -1055,6 +1060,14 @@ namespace LockFree
 				Init();
 			}
 
+			/**
+			 * @brief DigitsQueue Конструктор очереди чисел
+			 * @param fake_value фиктивное значение (не может присутствовать в очереди)
+			 * @param threads_num максимальное количество потоков, одновременно
+			 * обращающихся к очереди
+			 * @param clean_period периодичность очистки очереди на отложенное
+			 * удаление (через каждые clean_period удалений элементов DigitsQueue)
+			 */
 			DigitsQueue( Type fake_value,
 			             uint8_t threads_num,
 			             uint16_t clean_period = GetCleanPeriod<Type>() ):

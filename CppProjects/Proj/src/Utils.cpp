@@ -99,14 +99,20 @@ namespace Bicycle
 	{
 		if( !WasCancelled.exchange( true ) )
 		{
+			// Задача не была отменена
 			MY_ASSERT( Task );
 			Task();
 		}
 	}
+
+	bool CancellableTask::IsCancelled() const
+	{
+		return WasCancelled.load();
+	}
 	
 	CancellableTask::operator bool() const
 	{
-		return !WasCancelled.load();
+		return !IsCancelled();
 	}
 	
 	bool CancellableTask::Cancel()
@@ -184,6 +190,7 @@ namespace Bicycle
 				{
 					MY_ASSERT( iter->first <= tp );
 					MY_ASSERT( iter->second );
+					MY_ASSERT( *( iter->second ) );
 					( *iter->second )();
 				} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
 			

@@ -26,8 +26,8 @@ namespace Bicycle
 			/// Ссылка на сопрограмму, которая удаляет сопрограмму, из которой в неё перешли, если та завершена
 			Coroutine &DeleteCoro;
 
-			/// Указатель на задачу, "оставленную" дескриптором при переходе в основную сопрограмму
-			std::function<void()> *DescriptorTask;
+			/// Задача, "оставленная" дескриптором при переходе в основную сопрограмму
+			std::function<void()> DescriptorTask;
 
 			SrvInfoStruct( Service &srv_ref,
 			               Coroutine &main_coro,
@@ -107,20 +107,15 @@ namespace Bicycle
 
 			while( true )
 			{
-				std::function<void()> task;
 				srv_info_ptr = ( SrvInfoStruct* ) SrvInfoPtr.Get();
-				if( ( srv_info_ptr != nullptr ) &&
-				    ( srv_info_ptr->DescriptorTask != nullptr ) )
-				{
-					task = std::move( *( srv_info_ptr->DescriptorTask ) );
-					srv_info_ptr->DescriptorTask = nullptr;
-				}
-
-				if( !task )
+				MY_ASSERT( srv_info_ptr != nullptr );
+				if( !srv_info_ptr->DescriptorTask )
 				{
 					// Задач не оставлено
 					break;
 				}
+				
+				std::function<void()> task( std::move( srv_info_ptr->DescriptorTask ) );
 
 				// Выполняем задачу
 				task();
@@ -420,7 +415,8 @@ namespace Bicycle
 				info_ptr->ServiceRef.Post( cur_coro_ptr );
 			});
 
-			info_ptr->DescriptorTask = &task;
+			MY_ASSERT( !info_ptr->DescriptorTask );
+			info_ptr->DescriptorTask = std::move( task );
 			bool res = info_ptr->MainCoro.SwitchTo();
 			MY_ASSERT( res );
 		} // void YieldCoro()
@@ -454,9 +450,15 @@ namespace Bicycle
 			SrvRef.Post( &coro_ref );
 		}
 
-		void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
+		ServiceWorker::poster_t ServiceWorker::GetPoster() const
 		{
-			if( ( task == nullptr ) || !*task )
+			Service &srv_ref = SrvRef;
+			return poster_t( [ &srv_ref ]( Coroutine &coro_ref ){ srv_ref.Post( &coro_ref ); } );
+		}
+
+		void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> &&task )
+		{
+			if( !task )
 			{
 				MY_ASSERT( false );
 				return;
@@ -465,10 +467,10 @@ namespace Bicycle
 			SrvInfoStruct *info_ptr = ( SrvInfoStruct* ) SrvInfoPtr.Get();
 			MY_ASSERT( info_ptr != nullptr );
 			MY_ASSERT( info_ptr->DescriptorTask == nullptr );
-			info_ptr->DescriptorTask = task;
+			info_ptr->DescriptorTask = std::move( task );
 
 			info_ptr->MainCoro.SwitchTo();
-		} // void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> *task )
+		} // void ServiceWorker::SetPostTaskAndSwitchToMainCoro( std::function<void()> &&task )
 
 		bool ServiceWorker::IsStopped() const
 		{

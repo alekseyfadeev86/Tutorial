@@ -282,27 +282,33 @@ void timer_test()
 		CancellableTask task1;
 		MY_CHECK_ASSERT( !task1 );
 		MY_CHECK_ASSERT( !task1.Cancel() );
-	
+		MY_CHECK_ASSERT( task1.IsCancelled() != ( bool ) task1 );
+
 		int64_t count = 0;
 		CancellableTask task2( [ &count ](){ ++count; } );
 		MY_CHECK_ASSERT( task2 );
 		task2();
 		MY_CHECK_ASSERT( count == 1 );
 		MY_CHECK_ASSERT( !task2 );
+		MY_CHECK_ASSERT( task2.IsCancelled() != ( bool ) task2 );
 		MY_CHECK_ASSERT( !task2.Cancel() );
 		task2();
 		MY_CHECK_ASSERT( count == 1 );
 		MY_CHECK_ASSERT( !task2 );
+		MY_CHECK_ASSERT( task2.IsCancelled() != ( bool ) task2 );
 		MY_CHECK_ASSERT( !task2.Cancel() );
 		
 		CancellableTask task3( [ &count ](){ ++count; } );
 		MY_CHECK_ASSERT( task3 );
+		MY_CHECK_ASSERT( task3.IsCancelled() != ( bool ) task3 );
 		MY_CHECK_ASSERT( task3.Cancel() );
 		MY_CHECK_ASSERT( !task3 );
+		MY_CHECK_ASSERT( task3.IsCancelled() != ( bool ) task3 );
 		MY_CHECK_ASSERT( !task3.Cancel() );
 		task3();
 		MY_CHECK_ASSERT( count == 1 );
 		MY_CHECK_ASSERT( !task3 );
+		MY_CHECK_ASSERT( task3.IsCancelled() != ( bool ) task3 );
 		MY_CHECK_ASSERT( !task3.Cancel() );
 	}
 	
@@ -330,13 +336,7 @@ void timer_test()
 	
 	const uint8_t N( 3 );
 	clock_type::time_point tp[ N ];
-#ifdef _DEBUG
 	uint64_t microsec_timeouts[ N ] = { 1000*1000, 2000*1000, 3000*1000 };
-	//uint64_t microsec_timeouts[ N ] = { 1000*1000, 20*1000*1000, 300*000*1000 };
-#else
-#error "вернуть"
-	uint64_t microsec_timeouts[ N ] = { 1000*1000, 2000*1000, 3000*1000 };
-#endif
 	
 	std::mutex mut;
 	std::condition_variable cv;

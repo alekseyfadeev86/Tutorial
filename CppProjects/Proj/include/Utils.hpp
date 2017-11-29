@@ -315,6 +315,9 @@ namespace Bicycle
 			{
 				MY_ASSERT( ( bool ) Task != WasCancelled.load() );
 			}
+
+			/// Показывает, была ли задача отменена
+			bool IsCancelled() const;
 			
 			/**
 			 * @brief operator () потокобезопасное выполнение задачи:
@@ -339,7 +342,8 @@ namespace Bicycle
 	{
 		public:
 			typedef std::shared_ptr<CancellableTask> task_type;
-			
+			typedef std::weak_ptr<CancellableTask> task_weak_type;
+
 		private:
 			typedef std::chrono::system_clock ClockType;
 			

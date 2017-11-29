@@ -51,7 +51,7 @@ namespace Bicycle
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
 			// дойдёт очередь владения блокировкой)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 		}
 
 		bool Mutex::TryLock()
@@ -278,7 +278,7 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
 			// дойдёт очередь владения блокировкой)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 			
 			VALIDATE_UNIQUE_LOCK;
 		} // void SharedMutex::Lock()
@@ -390,7 +390,7 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
 			// дойдёт очередь владения блокировкой)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 			
 			VALIDATE_SHARED_LOCK;
 		} // void SharedMutex::SharedLock()
@@ -605,7 +605,7 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
 			// увеличится счётчик)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 		} // void Semaphore::Pop()
 
 		//-----------------------------------------------------------------------------------------
@@ -690,7 +690,7 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
 			// увеличится счётчик)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 		} // void Event::Wait()
 	} // namespace CoroService
 } // namespace Bicycle

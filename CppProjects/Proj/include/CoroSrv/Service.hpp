@@ -290,8 +290,13 @@ namespace Bicycle
 				 */
 				void PostToSrv( Coroutine &coro_ref );
 
+				typedef std::function<void( Coroutine& )> poster_t;
+
+				/// Формирует функтор (не зависящий от времени жизни объекта ServiceWorker), выполняющий PostToSrv
+				poster_t GetPoster() const;
+
 				/// Сохранение указателя на задачу и переход в основную сопрограмму сервиса
-				void SetPostTaskAndSwitchToMainCoro( std::function<void()> *task );
+				void SetPostTaskAndSwitchToMainCoro( std::function<void()> &&task );
 
 				/// Показывает, находится ли сервис в процессе остановки
 				bool IsStopped() const;

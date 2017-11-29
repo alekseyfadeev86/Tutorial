@@ -18,67 +18,23 @@ namespace Bicycle
 		class Timer: public AbstractCloser
 		{
 			private:
-				//typedef std::chrono::steady_clock ClockType;
-				typedef std::chrono::system_clock ClockType;
-
-				class TimerThread
-				{
-					private:
-						/// Флаг, показывающий, нужно ли продолжать работу
-						std::atomic<bool> RunFlag;
-
-						/// Рабочий поток
-						std::thread WorkThread;
-
-						std::condition_variable Cv;
-						std::mutex Mut;
-
-						typedef std::chrono::time_point<ClockType> time_type;
-						typedef std::function<void()> task_type;
-						typedef std::pair<time_type, task_type> elem_type;
-
-						/// Задачи для таймера
-						LockFree::ForwardList<elem_type> Tasks;
-
-						/// Задача рабочего потока
-						void ThreadFunc();
-
-					public:
-						TimerThread();
-						~TimerThread();
-
-						/**
-						 * @brief Post добавление задачи в очередь таймера
-						 * @param task задача
-						 * @param timeout_microsec время (в микросекундах)
-						 * спустя которое задача должна быть выполнена
-						 */
-						void Post( const std::function<void()> &task, uint64_t timeout_microsec );
-				};
-
-				static std::shared_ptr<TimerThread> GetTimerThread();
-
 				/// Указатель на поток таймера
-				const std::shared_ptr<TimerThread> SharedTimerPtr;
+				const std::shared_ptr<TimeTasksQueue> SharedTimerPtr;
 
-				/// Структура "работника" для пробуждения сопрграмм при сработке таймера
-				struct TimerWorker
-				{
-					/// Флаг для однократного выполнения работы
-					std::atomic<bool> Flag;
+				// first - указатель на сопрограмму, second - указатель на флаг причины сработки
+				// 0 - таймер сработал
+				// < 0 - таймер сработал до начала ожидания
+				// > 0 - ожидание было отменено
+				typedef std::pair<Coroutine*, int8_t*> element_t;
+				typedef LockFree::ForwardList<element_t> waiters_t;
 
-					// first - указатель на сопрограмму, second - указатель на флаг причины сработки^
-					// 0 - таймер сработал
-					// < 0 - таймер сработал до начала ожидания
-					// > 0 - ожидание было отменено
-					typedef std::pair<Coroutine*, int8_t*> element_t;
+				/// Список сопрограмм, ждущих сработки таймера
+				waiters_t Waiters;
 
-					/// Список сопрограмм, ждущих сработки таймера
-					LockFree::ForwardList<element_t> Waiters;
-				};
+				SharedSpinLock TaskPtrLock;
 
-				SharedSpinLock WorkerPtrLock;
-				std::weak_ptr<TimerWorker> WorkerPtr;
+				/// "Слабый" указатель на объект задачи таймера (нужен для оптимизации отмены задачи)
+				TimeTasksQueue::task_weak_type TaskWeakPtr;
 
 			public:
 				Timer();

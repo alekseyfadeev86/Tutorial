@@ -5,118 +5,7 @@ namespace Bicycle
 {
 	namespace CoroService
 	{
-		void Timer::TimerThread::ThreadFunc()
-		{
-			// Задачи, отсортированные по времени сработки
-			std::multimap<time_type, task_type> tasks_map;
-
-			while( RunFlag.load() )
-			{
-				// Считываем новые задачи, сортируем их по времени сработки
-				auto new_elems = Tasks.Release();
-				while( new_elems )
-				{
-					tasks_map.insert( new_elems.Pop() );
-				}
-
-				bool timeout_expired = false;
-				std::unique_lock<std::mutex> lock( Mut );
-				MY_ASSERT( lock );
-				if( !RunFlag.load() )
-				{
-					// Завершаем работу
-					break;
-				}
-				else if( Tasks )
-				{
-					// Появились новые задачи
-					continue;
-				}
-
-				if( tasks_map.empty() )
-				{
-					Cv.wait( lock );
-				}
-				else
-				{
-					const auto tp = tasks_map.begin()->first;
-					timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
-				}
-				lock.unlock();
-
-				if( timeout_expired )
-				{
-					// Сработка таймера
-					// Определяем текущее время и диапазон обрабатываемых элементов
-					// (время у которых не позже текущего)
-					const auto tp = ClockType::now();
-					const auto begin = tasks_map.begin();
-					const auto end = tasks_map.upper_bound( tp );
-
-					for( auto iter = begin; iter != end; ++iter )
-					{
-						MY_ASSERT( iter->first <= tp );
-						MY_ASSERT( iter->second );
-						iter->second();
-					} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
-
-					// Удаляем обработанные элементы
-					tasks_map.erase( begin, end );
-				} // if( timeout_expired )
-			} // while( RunFlag.load() )
-		} // void Timer::TimerThread::ThreadFunc()
-
-		Timer::TimerThread::TimerThread(): RunFlag( true )
-		{
-			WorkThread = std::thread( [ this ]() { ThreadFunc(); } );
-		}
-
-		Timer::TimerThread::~TimerThread()
-		{
-			RunFlag.store( false );
-			{
-				std::lock_guard<std::mutex> lock( Mut );
-				Cv.notify_all();
-			}
-			WorkThread.join();
-		}
-
-		void Timer::TimerThread::Post( const std::function<void ()> &task,
-		                               uint64_t timeout_microsec )
-		{
-			if( !task )
-			{
-				return;
-			}
-
-			auto time_point = ClockType::now() + std::chrono::microseconds( timeout_microsec );
-			if( Tasks.Push( time_point, task ) )
-			{
-				// Дёргаем condition_variable только, если добавили первый элемент
-				// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
-				std::lock_guard<std::mutex> lock( Mut );
-				Cv.notify_one();
-			}
-		} // void Timer::TimerThread::Post
-
-		std::shared_ptr<Timer::TimerThread> Timer::GetTimerThread()
-		{
-			static std::mutex Mut;
-			static std::weak_ptr<TimerThread> WeakPtr;
-
-			std::lock_guard<std::mutex> lock( Mut );
-			auto res = WeakPtr.lock();
-			if( !res )
-			{
-				res.reset( new TimerThread );
-				WeakPtr = res;
-			}
-
-			MY_ASSERT( res );
-			return res;
-		}
-
-		Timer::Timer(): SharedTimerPtr( GetTimerThread() )
+		Timer::Timer(): SharedTimerPtr( TimeTasksQueue::GetQueue() )
 		{
 			MY_ASSERT( SharedTimerPtr );
 		}
@@ -132,41 +21,28 @@ namespace Bicycle
 				return;
 			}
 
-			LockGuard<SharedSpinLock> lock( WorkerPtrLock );
-			std::shared_ptr<TimerWorker>  new_worker( WorkerPtr.lock() );
-			if( new_worker && !new_worker->Flag.load() )
+			LockGuard<SharedSpinLock> lock( TaskPtrLock );
+			if( Waiters )
 			{
-				// Таймер ещё активен (ещё не сработал)
+				// Список ожидающих сопрограмм не пуст - таймер ещё активен (ещё не сработал)
 				err.Code = ErrorCodes::TimerNotExpired;
 				err.What = "Timer already active";
 				return;
 			}
 
-			new_worker.reset( new TimerWorker );
-			MY_ASSERT( new_worker );
-
-			// Явно сбрасываем флаг выполнения
-			new_worker->Flag.store( false );
+			MY_ASSERT( !( TaskWeakPtr.expired() && Waiters ) );
 
 			// Добавляем фиктивный элемент
 			// (понадобится при отмене и обработке срабатывания таймера)
-			new_worker->Waiters.Push( nullptr, nullptr );
-			WorkerPtr = new_worker;
+			Waiters.Push( nullptr, nullptr );
 
 			// Добавляем в поток таймера задачу
 			MY_ASSERT( SharedTimerPtr );
-			SharedTimerPtr->Post( [ this, new_worker ]()
+			TimeTasksQueue::task_type new_task_ptr( new CancellableTask( [ this ]()
 			{
-				MY_ASSERT( new_worker );
-				if( new_worker->Flag.exchange( true ) )
-				{
-					// Обработка уже выполнена
-					return;
-				}
-
 				// Извлекаем и обрабатываем элементы сопрограмм
-				auto waiters = new_worker->Waiters.Release();
-				TimerWorker::element_t elem;
+				auto waiters = Waiters.Release();
+				element_t elem;
 #ifdef _DEBUG
 				try
 				{
@@ -175,6 +51,8 @@ namespace Bicycle
 				{
 					elem = waiters.Pop();
 					MY_ASSERT( ( elem.first == nullptr ) == ( elem.second == nullptr ) );
+					MY_ASSERT( ( elem.first == nullptr ) == !waiters );
+
 					if( elem.first != nullptr )
 					{
 						// Таймер сработал
@@ -185,6 +63,7 @@ namespace Bicycle
 						PostToSrv( *elem.first );
 					}
 				} // while( waiters )
+				MY_ASSERT( !waiters );
 #ifdef _DEBUG
 				}
 				catch( ... )
@@ -192,9 +71,12 @@ namespace Bicycle
 					MY_ASSERT( false );
 				}
 #endif
-			}, microseconds );
-			new_worker.reset();
-			MY_ASSERT( !WorkerPtr.expired() );
+			} ) );
+
+			TaskWeakPtr = new_task_ptr;
+			SharedTimerPtr->Post( new_task_ptr, microseconds );
+			new_task_ptr.reset();
+			MY_ASSERT( !TaskWeakPtr.expired() );
 		} // void Timer::ExpiresAfter( uint64_t microseconds, Error &err )
 
 		void Timer::ExpiresAfter( uint64_t microseconds )
@@ -215,20 +97,6 @@ namespace Bicycle
 				return;
 			}
 
-			std::shared_ptr<TimerWorker> worker_ptr;
-			{
-				SharedLockGuard<SharedSpinLock> lock( WorkerPtrLock );
-				worker_ptr = WorkerPtr.lock();
-			}
-
-			if( !worker_ptr )
-			{
-				// Таймер уже сработал
-				err.Code = ErrorCodes::TimerExpired;
-				err.What = "Timer already expired";
-				return;
-			}
-
 			Coroutine *cur_coro_ptr = GetCurrentCoro();
 			if( cur_coro_ptr == nullptr )
 			{
@@ -238,44 +106,80 @@ namespace Bicycle
 			}
 
 			int8_t flag = 0;
+			int8_t *flag_ptr = &flag;
 
-			// Таймер активен (по крайней мере, был)
-			std::function<void()> task = [ this, &worker_ptr, cur_coro_ptr, &flag ]()
+			auto poster = GetPoster();
+			MY_ASSERT( poster );
+
+			std::function<void()> task = [ this, poster, cur_coro_ptr, flag_ptr ]()
 			{
-				if( worker_ptr->Waiters.Push( cur_coro_ptr, &flag ) )
+				waiters_t::Unsafe local_waiters;
 				{
-					// Элементы уже были извлечены - таймер сработал
-					auto waiters = worker_ptr->Waiters.Release();
-					MY_ASSERT( worker_ptr->Flag.load() );
-					TimerWorker::element_t elem;
-#ifdef _DEBUG
-					try
+					SharedLockGuard<SharedSpinLock> lock( TaskPtrLock );
+					auto task_ptr = TaskWeakPtr.lock();
+					if( !task_ptr || task_ptr->IsCancelled() )
 					{
-#endif
-					while( waiters )
+						// Таймер уже сработал
+						local_waiters.Push( cur_coro_ptr, flag_ptr );
+					}
+					else if( Waiters.Push( cur_coro_ptr, flag_ptr ) )
 					{
-						elem = waiters.Pop();
-						MY_ASSERT( ( elem.first != nullptr ) && ( elem.second != nullptr ) );
-						*( elem.second ) = -1;
+						// Элементы уже были извлечены (был добавлен первый элемент) - таймер сработал
+						MY_ASSERT( task_ptr->IsCancelled() );
+						local_waiters = Waiters.Release();
+					}
+					else
+					{
+						// Всё норм
+						return;
+					}
+				}
 
+#ifdef _DEBUG
+				try
+				{
+#endif
+				MY_ASSERT( local_waiters );
+				element_t elem;
+				while( local_waiters )
+				{
+					elem = local_waiters.Pop();
+					MY_ASSERT( ( elem.first != nullptr ) && ( elem.second != nullptr ) );
+
+					// Помечаем флаг как "таймер сработал до начала ожидания"
+					*( elem.second ) = -1;
+					Coroutine &coro_ref = *elem.first;
+
+					if( local_waiters )
+					{
 						// Передаём сервису указатель на сопрограмму для выполнения
 						MY_ASSERT( elem.first != nullptr );
-						PostToSrv( *elem.first );
-					} // while( waiters )
-#ifdef _DEBUG
+						poster( coro_ref );
 					}
-					catch( ... )
+					else
 					{
-						MY_ASSERT( false );
+						// Переходим отсюда в сопрограмму напрямую,
+						// чтобы лишний раз не нагружать сервис
+						// (больше тут делать всё равно нечего)
+						bool res = coro_ref.SwitchTo();
+						MY_ASSERT( res );
+						return;
 					}
-#endif
+				} // while( waiters )
+				MY_ASSERT( false );
+#ifdef _DEBUG
 				}
-			};
+				catch( ... )
+				{
+					MY_ASSERT( false );
+				}
+#endif
+			}; // std::function<void()> task = [ poster, worker_ptr, cur_coro_ptr, flag_ptr ]()
 
 			// Переходим в основную сопрограмму и выполняем task
 			// (обратно вернёмся либо из task-а, либо позже, когда
-			// увеличится счётчик)
-			SetPostTaskAndSwitchToMainCoro( &task );
+			// сработает таймер)
+			SetPostTaskAndSwitchToMainCoro( std::move( task ) );
 
 			if( flag < 0 )
 			{
@@ -301,35 +205,25 @@ namespace Bicycle
 		void Timer::Cancel( Error &err )
 		{
 			err = Error();
-			if( IsStopped() )
+			waiters_t::Unsafe local_waiters;
 			{
-				// Сервис в процессе остановки
-				err.Code = ErrorCodes::SrvStop;
-				err.What = "Coro service is stopping";
-				return;
+				SharedLockGuard<SharedSpinLock> lock( TaskPtrLock );
+				auto task_ptr = TaskWeakPtr.lock();
+				if( task_ptr && task_ptr->Cancel() )
+				{
+					// Отменили задачу таймера
+					local_waiters = Waiters.Release();
+				}
 			}
 
-			std::shared_ptr<TimerWorker> worker_ptr;
-			{
-				SharedLockGuard<SharedSpinLock> lock( WorkerPtrLock );
-				worker_ptr = WorkerPtr.lock();
-			}
-
-			if( !worker_ptr || worker_ptr->Flag.exchange( true ) )
-			{
-				// Таймер уже сработал, либо обработка отменена
-				return;
-			}
-
-			auto waiters = worker_ptr->Waiters.Release();
-			TimerWorker::element_t elem;
+			element_t elem;
 #ifdef _DEBUG
 			try
 			{
 #endif
-			while( waiters )
+			while( local_waiters )
 			{
-				elem = waiters.Pop();
+				elem = local_waiters.Pop();
 				MY_ASSERT( ( elem.first == nullptr ) == ( elem.second == nullptr ) );
 				if( elem.first != nullptr )
 				{

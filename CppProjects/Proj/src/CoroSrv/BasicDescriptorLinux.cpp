@@ -166,8 +166,9 @@ namespace Bicycle
 
 				// Дескриптор не готов к выполнению требуемой операции,
 				// ожидаем готовности с помощью epoll-а
-				Service *srv_ptr = &SrvRef;
-				std::function<void()> epoll_task = [ &err, &ep_waiter, srv_ptr, &lock,
+				auto poster = GetPoster();
+				MY_ASSERT( poster );
+				std::function<void()> epoll_task = [ &err, &ep_waiter, poster, &lock,
 													 desc_ptr, queue_ptr,
 													 flag_ptr, cur_ep_ev ]
 				{
@@ -237,7 +238,7 @@ namespace Bicycle
 					while( waiters )
 					{
 						ptr = waiters.Pop();
-						srv_ptr->Post( &( ptr->CoroRef ) );
+						poster( ptr->CoroRef );
 					}
 
 					bool res = waiter_ptr->CoroRef.SwitchTo();
@@ -245,12 +246,12 @@ namespace Bicycle
 
 					// Сюда попадаем уже после смены контекста - остаётся только уйти
 					return;
-				}; // std::function<void()> epoll_task = [ & ]
+				}; // std::function<void()> epoll_task
 
 				// Переходим в основную сопрограмму и настраиваем epoll.
 				// Сюда возвращаемся, когда дескриптор будет готов к работе
 				// или закрыт, либо в случае ошибки
-				SetPostTaskAndSwitchToMainCoro( &epoll_task );
+				SetPostTaskAndSwitchToMainCoro( std::move( epoll_task ) );
 				
 				MY_ASSERT( !lock );
 
