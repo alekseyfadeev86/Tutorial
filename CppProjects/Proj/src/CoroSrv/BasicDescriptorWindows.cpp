@@ -80,8 +80,13 @@ namespace Bicycle
 			return err;
 		}
 
-		BasicDescriptor::BasicDescriptor(): AbstractCloser(),
-		                                    Fd( INVALID_HANDLE_VALUE )
+		BasicDescriptor::BasicDescriptor( uint64_t read_timeout_microsec,
+		                                  uint64_t write_timeout_microsec ):
+		    AbstractCloser(),
+		    ReadTimeoutMicrosec( read_timeout_microsec ),
+		    WriteTimeoutMicrosec( write_timeout_microsec ),
+		    Fd( INVALID_HANDLE_VALUE ),
+		    TimerQueuePtr( InitTimeout( read_timeout_microsec, write_timeout_microsec ) )
 		{}
 
 		void BasicDescriptor::Open( Error &err )

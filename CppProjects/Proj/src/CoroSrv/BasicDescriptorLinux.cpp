@@ -10,12 +10,212 @@ namespace Bicycle
 {
 	namespace CoroService
 	{
+		EpWaitStruct::EpWaitStruct( Coroutine &coro_ref ): CoroRef( coro_ref ),
+		                                                   LastEpollEvents( 0 ),
+		                                                   WasCancelled( false ) {}
+		
+		Coroutine* EpWaitStruct::Execute( uint64_t epoll_events )
+		{
+			LastEpollEvents = epoll_events;
+			return &CoroRef;
+		}
+		
+		Coroutine* EpWaitStruct::Cancel()
+		{
+			WasCancelled = true;
+			return &CoroRef;
+		}
+		
+		bool EpWaitStruct::IsCancelled() const
+		{
+			return WasCancelled;
+		}
+		
+		uint64_t EpWaitStruct::EpollEvents() const
+		{
+			return LastEpollEvents;
+		}
+		
+		EpWaitStructEx::EpWaitStructEx( Coroutine &coro_ref ): EpWaitStruct( coro_ref ),
+		                                                       WasExecuted( false ) {}
+		
+		Coroutine* EpWaitStructEx::Execute( uint64_t epoll_events )
+		{
+			return WasExecuted.exchange( true ) ? nullptr : EpWaitStruct::Execute( epoll_events );
+		}
+		
+		Coroutine* EpWaitStructEx::Cancel()
+		{
+			return WasExecuted.exchange( true ) ? nullptr : EpWaitStruct::Cancel();
+		}
+		
+		template <bool UseTimeout>
+		struct ElemType
+		{};
+		
+		template <typename T>
+		Coroutine* ExecOrCancel( Type elem, uint64_t ep_evs, bool is_cancel );
+		
+		template <>
+		struct ElemType<false>
+		{
+			typedef EpWaitStruct* Type;
+		};
+		template<>
+		Coroutine* ExecOrCancel<ElemType<false>::Type>( ElemType<false>::Type elem, uint64_t ep_evs, bool is_cancel )
+		{
+			return ( elem != nullptr ) ? ( is_cancel ? elem->Cancel() : elem->Execute( ep_evs ) ) : nullptr;
+		}
+		
+		template <>
+		struct ElemType<true>
+		{
+			typedef std::weak_ptr<EpWaitStructEx> Type;
+		};
+		template<>
+		Coroutine* ExecOrCancel<ElemType<true>::Type>( ElemType<true>::Type ptr, uint64_t ep_evs, bool is_cancel )
+		{
+			auto elem = ptr.lock();
+			return elem ? ( is_cancel ? elem->Cancel() : elem->Execute( ep_evs ) ) : nullptr;
+		}
+		
+		template<bool ReadWithTimeout, bool WriteWithTimeout>
+		struct EpollWorker: public DescriptorEpollWorker
+		{
+			private:
+				template <typename T>
+				struct Converter
+				{
+					static T* Conv( T *ptr )
+					{
+						return ptr;
+					}
+				
+					template <typename T2>
+					static T* Conv( T2* )
+					{
+						return nullptr;
+					}
+				};
+				
+				template <typename T>
+				static void WorkList( std::pair<LockFree::ForwardList<T>, std::atomic_flag> &in,
+				                      coro_list_t &out, uint64_t ep_evs, bool cancel )
+				{
+					// Сбрасываем флаг, чтобы показать, что epoll сработал
+					in.second.clear();
+					
+					LockFree::ForwardList<T>::Unsafe l = in.first.Release();
+					Coroutine coro_ptr = nullptr;
+					while( l )
+					{
+						coro_ptr = ExecOrCancel<T>( l.Pop(), ep_evs, cancel );
+						if( coro_ptr != nullptr )
+						{
+							out.Push( coro_ptr );
+						}
+					}
+				}
+				
+			public:
+				typedef ElemType<ReadWithTimeout>::Type  ReadElemType;
+				typedef ElemType<WriteWithTimeout>::Type WriteElemType;
+				typedef ElemType<ReadWithTimeout>::Type  ReadOobElemType;
+					
+				std::pair<LockFree::ForwardList<ReadElemType>,    std::atomic_flag> ReadQueue;
+				std::pair<LockFree::ForwardList<WriteElemType>,   std::atomic_flag> WriteQueue;
+				std::pair<LockFree::ForwardList<ReadOobElemType>, std::atomic_flag> ReadOobQueue;
+					
+				virtual coro_list_t Work( uint32_t events_mask ) override final
+				{
+					coro_list_t res;
+					
+					// События готовности на одном из дескрипторов
+					static const uint32_t ErrMask = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
+					static const uint32_t TaskMask = EPOLLIN | EPOLLOUT | EPOLLPRI;
+
+					if( ( events_mask & ErrMask ) != 0 )
+					{
+						// Есть события ошибки - дёргаем все сопрограммы-"ждуны"
+						// (ожидающие готовности на чтение, запись и чтение
+						// внеполосных данных, пусть сами разбираются с ошибками)
+						events_mask = TaskMask;
+					}
+					else
+					{
+						// Ошибок нет, отсекаем только нужные нам события
+						events_mask &= TaskMask;
+					}
+					MY_ASSERT( ( events_mask & ErrMask ) == 0 );
+
+					if( ( events_mask & EPOLLIN ) != 0 )
+					{
+						WorkList<ReadElemType>( ReadQueue, res, events_mask, false );
+					}
+
+					if( ( events_mask & EPOLLOUT ) != 0 )
+					{
+						WorkList<WriteElemType>( WriteQueue, res, events_mask, false );
+					}
+
+					if( ( events_mask & EPOLLPRI ) != 0 )
+					{
+						WorkList<ReadOobElemType>( ReadOobQueue, res, events_mask, false );
+					}
+					
+					return res;
+				}
+				
+				virtual coro_list_t Cancel() override final
+				{
+					coro_list_t res;
+					
+					WorkList<ReadElemType>( ReadQueue, res, 0, true );
+					WorkList<WriteElemType>( WriteQueue, res, 0, true );
+					WorkList<ReadOobElemType>( ReadOobQueue, res, 0, true );
+					
+					return res;
+				}
+				
+				virtual std::pair<list_t*, list_ex_t*> GetListPtr( IoTaskTypeEnum task_type ) override final
+				{
+					std::pair<list_t*, list_ex_t*> res( nullptr, nullptr );
+					
+					switch( task_type )
+					{
+						case IoTaskTypeEnum::Read:
+							res.first  = Converter<list_t>::Conv( &ReadQueue );
+							res.second = Converter<list_ex_t>::Conv( &ReadQueue );
+							break;
+							
+						case IoTaskTypeEnum::Write:
+							res.first  = Converter<list_t>::Conv( &WriteQueue );
+							res.second = Converter<list_ex_t>::Conv( &WriteQueue );
+							break;
+							
+						case IoTaskTypeEnum::ReadOob:
+							res.first  = Converter<list_t>::Conv( &ReadOobQueue );
+							res.second = Converter<list_ex_t>::Conv( &ReadOobQueue );
+							break;
+							
+						default:
+							MY_ASSERT( false );
+							break;
+					}
+					
+					MY_ASSERT( ( res.first == nullptr ) != ( res.second == nullptr ) );
+					return res;
+				}
+		};
+		
+		//-----------------------------------------------------------------------------------------
+		
 		void BasicDescriptor::CloseDescriptor( int fd, Error &err )
 		{
 			err = close( fd ) != 0 ? GetLastSystemError() : Error();
 		}
 
-		Error BasicDescriptor::InitAndRegisterNewDescriptor( int fd, const desc_ptr_t &desc_data_ptr )
+		Error BasicDescriptor::InitAndRegisterNewDescriptor( int fd, const AbstractEpollWorker &worker_ptr )
 		{
 			MY_ASSERT( desc_data_ptr );
 			MY_ASSERT( desc_data_ptr->Fd == -1 );
@@ -60,7 +260,40 @@ namespace Bicycle
 				MY_ASSERT( false );
 				throw std::invalid_argument( "Incorrect task" );
 			}
+			
+			const uint64_t timeout = task_type == IoTaskTypeEnum::Write ? WriteTimeoutMicrosec : ReadTimeoutMicrosec;
+			if( timeout == 0 )
+			{
+				SharedLockGuard<SharedSpinLock> lock( Lock );
 
+				if( Fd == -1 )
+				{
+					// Дескриптор не открыт
+					return Error( ErrorCodes::NotOpen, "Descriptor is not open" );
+				}
+
+				// Пробуем выполнить задачу ввода-вывода
+				err_code_t err_code;
+				do
+				{
+					// В случае прерывания сигналом, повторяем попытку
+					err_code = task( DescriptorData->Fd );
+				}
+				while( err_code == EINTR );
+
+#ifndef _DEBUG
+#error "? вернуть специальную ошибку в случае, если дескриптор не готов ?"
+				//if( ( err_code != EAGAIN ) && ( err_code != EWOULDBLOCK ) ){qaz}
+#endif
+				return GetSystemErrorByCode( err_code );
+			} // if( timeout == 0 )
+
+			// Получаем 2 указателя на список элементов.
+			// Если first - ненулевой, то не используем таймер, иначе - используем
+			// (из них всегда только один нулевой, не больше и не меньше)
+			auto list_ptrs = Data->GetListPtr();
+			MY_ASSERT( ( list_ptrs.first == nullptr ) != ( list_ptrs.second ) );
+			
 			// Указатель на текущую сопрограмму
 			Coroutine *cur_coro_ptr = GetCurrentCoro();
 			if( cur_coro_ptr == nullptr )
@@ -69,75 +302,60 @@ namespace Bicycle
 				return Error( ErrorCodes::NotInsideSrvCoro,
 				              "Incorrect function call: not inside service coroutine" );
 			}
-
-			MY_ASSERT( DescriptorData );
-			SharedLocker<SharedSpinLock> lock( DescriptorData->Lock, true );
+			
+			EpWaitStruct waiter( *cur_coro_ptr );
+			EpWaitStruct *waiter_ptr = nullptr;
+			std::shared_ptr<EpWaitStructEx> waiter_ex_ptr;
+			
+			if( list_ptrs.first != nullptr )
+			{
+				MY_ASSERT( timeout == TimeoutInfinite );
+				waiter_ptr = &waiter;
+			}
+			else
+			{
+				MY_ASSERT( timeout != TimeoutInfinite );
+				MY_ASSERT( TimerQueuePtr );
+			}
+			
+			// Получаем указатель на таймер
+			MY_ASSERT( timeout != 0 );
+			const auto timer_ptr = ( timeout != TimeoutInfinite ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
+			MY_ASSERT( ( timeout != TimeoutInfinite ) == ( bool ) timer_ptr );
+			
+			MY_ASSERT( Data );
+			SharedLocker<SharedSpinLock> lock( Lock, true );
 			MY_ASSERT( lock );
 			MY_ASSERT( lock.Locked() );
-			if( DescriptorData->Fd == -1 )
+			if( Fd == -1 )
 			{
 				// Дескриптор не открыт
 				return Error( ErrorCodes::NotOpen, "Descriptor is not open" );
 			}
 
-			DescriptorStruct *desc_ptr = DescriptorData.get();
-
-			MY_ASSERT( desc_ptr != nullptr );
-			MY_ASSERT( ( ( uint8_t ) task_type ) < 3 );
-
 			// Ошибка завершения
 			Error err;
+			int &fd_ref = Fd;
+#error "TODO: переделать (использовать таймер или нет)"
 
-			// Указатель на список EpWaitStruct-ов, соответствующих
-			// сопрограммам, ожидающим готовности дескриптора к
-			// выполнению операции типа task_type
-			EpWaitList *queue_ptr = nullptr;
-
-			// Указатель на счётчик срабатываний epoll_wait-а
-			// для типа задач task_type
-			std::atomic_flag *flag_ptr = nullptr;
-
-			EpWaitStruct ep_waiter( *cur_coro_ptr );
-			MY_ASSERT( &( ep_waiter.CoroRef ) == cur_coro_ptr );
-			MY_ASSERT( ep_waiter.LastEpollEvents == 0 );
-			MY_ASSERT( !ep_waiter.WasCancelled );
-
-			uint32_t cur_ep_ev = 0;
-			switch( task_type )
-			{
-				case IoTaskTypeEnum::Read:
-					queue_ptr = &( desc_ptr->ReadQueue.first );
-					flag_ptr = &( desc_ptr->ReadQueue.second );
-					cur_ep_ev = EPOLLIN;
-					break;
-
-				case IoTaskTypeEnum::Write:
-					queue_ptr = &( desc_ptr->WriteQueue.first );
-					flag_ptr = &( desc_ptr->WriteQueue.second );
-					cur_ep_ev = EPOLLOUT;
-					break;
-
-				case IoTaskTypeEnum::ReadOob:
-					queue_ptr = &( desc_ptr->ReadOobQueue.first );
-					flag_ptr = &( desc_ptr->ReadOobQueue.second );
-					cur_ep_ev = EPOLLPRI;
-					break;
-			}
-			MY_ASSERT( queue_ptr != nullptr );
-			MY_ASSERT( flag_ptr != nullptr );
-
+			// Получаем функтор добавления ссылки на сопрограмму в очередь сервиса
+			// (poster передаётся в задачу, выполняемую в основной сопрограмме)
+			const auto poster = GetPoster();
+			MY_ASSERT( poster );
+#error "если использовать таймер - сформировать момент времени, когда он будет превышен, и проверять"
 			while( !err )
 			{
 				// Пробуем выполнить задачу
-				MY_ASSERT( desc_ptr != nullptr );
-				MY_ASSERT( !ep_waiter.WasCancelled );
+				MY_ASSERT( ( waiter_ptr == nullptr ) != waiter_ex_ptr );
+				MY_ASSERT( ( waiter_ptr == nullptr ) || !waiter_ptr->IsCancelled() );
+				MY_ASSERT( !waiter_ex_ptr || !waiter_ex_ptr->IsCancelled() );
 
 				if( !lock )
 				{
 					// Такое будет, если вышли на второй "виток" цикла
-					lock = SharedLocker<SharedSpinLock>( desc_ptr->Lock, true );
+					lock = SharedLocker<SharedSpinLock>( Lock, true );
 
-					if( DescriptorData->Fd == -1 )
+					if( fd_ref == -1 )
 					{
 						// Дескриптор не открыт
 						return Error( ErrorCodes::NotOpen, "Descriptor is not open" );
@@ -152,7 +370,7 @@ namespace Bicycle
 				{
 					// В случае прерывания сигналом, повторяем попытку
 					flag_ptr->test_and_set(); // Взводим флаг, что сработки epoll_wait-а не было
-					err = GetSystemErrorByCode( task( desc_ptr->Fd ) );
+					err = GetSystemErrorByCode( task( fd_ref ) );
 				}
 				while( err.Code == EINTR );
 
@@ -162,22 +380,26 @@ namespace Bicycle
 					// Операция завершена (успешно или нет - другой вопрос)
 					break;
 				}
-
+				
+				if( waiter_ptr == nullptr )
+				{
+					// EpWaitStructEx предполагает только однократное срабатывание,
+					// поэтому, каждый раз нужно создавать новый
+					waiter_ex_ptr.reset( new EpWaitStructEx( *cur_coro_ptr ) );
+				}
+				
+				MY_ASSERT( ( waiter_ptr == nullptr ) == ( bool ) waiter_ex_ptr );
 
 				// Дескриптор не готов к выполнению требуемой операции,
 				// ожидаем готовности с помощью epoll-а
-				auto poster = GetPoster();
-				MY_ASSERT( poster );
-				std::function<void()> epoll_task = [ &err, &ep_waiter, poster, &lock,
-													 desc_ptr, queue_ptr,
-													 flag_ptr, cur_ep_ev ]
+				std::function<void()> epoll_task = [ &err, waiter_ptr, waiter_ex_ptr, list_ptrs,
+				                                     poster, &lock, &fd_ref, timer_ptr ]
 				{
 					// Этот код выполняется из основной сопрограммы потока
 					MY_ASSERT( lock );
 					MY_ASSERT( lock.Locked() );
 					MY_ASSERT( desc_ptr->Fd != -1 );
-					MY_ASSERT( queue_ptr != nullptr );
-					MY_ASSERT( flag_ptr != nullptr );
+					MY_ASSERT( queue_flag_ptr != nullptr );
 
 					EpWaitList::Unsafe waiters;
 					{
@@ -193,7 +415,7 @@ namespace Bicycle
 						ep_waiter.LastEpollEvents = 0;
 						MY_ASSERT( !ep_waiter.WasCancelled );
 	
-						if( !flag_ptr->test_and_set() )
+						if( !queue_flag_ptr->second.test_and_set() )
 						{
 							// Было срабатывание epoll_wait-а
 							local_lock.Unlock();
@@ -202,7 +424,7 @@ namespace Bicycle
 							return;
 						}
 						
-						if( !queue_ptr->Push( &ep_waiter ) )
+						if( !queue_flag_ptr->first.Push( &ep_waiter ) )
 						{
 							// Добавили ep_waiter в список, но он был уже не пуст - выходим
 							return;
@@ -210,18 +432,19 @@ namespace Bicycle
 	
 						// !!! с этого момента нельзя обращаться к переменным из стека ExecuteIoTask !!!
 						// (другой поток мог уже перейти на ту сопрограмму)
-						// переменные, переданные сюда копированием, пользовать можно, в т.ч., queue_ptr,
-						// flag_ptr, которые ссылаются на поля DescriptorStruct-а, который 100% жив,
+						// переменные, переданные сюда копированием, пользовать можно, в т.ч.,
+						// fd_ref, которые ссылаются на поля BasicDescriptor-а, который 100% жив,
 						// т.к. его блокировка не была отпущена
+#error "взвести таймер (!!! только, если добавили первую задачу в список и таймаут - не бесконечность !!!)"
 	
 						// Проверяем флаг срабатываний epoll-а
-						if( flag_ptr->test_and_set() )
+						if( queue_flag_ptr->second.test_and_set() )
 						{
 							// Флаг был установлен, срабатываний epoll_wait-а не было - выходим
 							return;
 						}
 	
-						waiters = queue_ptr->Release();
+						waiters = queue_flag_ptr->first.Release();
 					} // SharedLocker<SharedSpinLock> local_lock( std::move( lock ) );
 					
 					if( !waiters )
@@ -255,11 +478,17 @@ namespace Bicycle
 				
 				MY_ASSERT( !lock );
 
-				if( ep_waiter.WasCancelled )
+				if( ( ( waiter_ptr != nullptr ) && waiter_ptr->IsCancelled() ) ||
+				    ( waiter_ex_ptr && waiter_ex_ptr->IsCancelled() ) )
 				{
 					// Задача была отменена
 					err.Code = ErrorCodes::OperationAborted;
 					err.What = "Operation was aborted";
+				}
+				else if( waiter_ex_ptr )
+				{
+					MY_ASSERT( waiter_ptr == nullptr );
+#error "TODO: отменить задачу таймера (если не удастся - значит, он уже сработал)"
 				}
 
 				// TODO: ? обрабатывать EPOLLHUP и EPOLLRDHUP в ep_waiter.LastEpollEvents ?
@@ -277,9 +506,52 @@ namespace Bicycle
 			return err;
 		} // Error BasicDescriptor::ExecuteIoTask
 
-		BasicDescriptor::BasicDescriptor(): AbstractCloser(),
-		                                    DescriptorData( new DescriptorStruct,
-		                                                    [ this ]( DescriptorStruct *ptr ){ SrvRef.DeleteQueue.Delete( ptr ); } )
+		BasicDescriptor::desc_ptr_t BasicDescriptor::InitDataPtr( uint64_t rd_timeout, uint64_t wr_timeout )
+		{
+			EpollWorker *ptr = nullptr;
+			
+			if( ( rd_timeout != 0 ) && ( rd_timeout != TimeoutInfinite ) )
+			{
+				// Используется таймаут на чтение
+				if( ( wr_timeout != 0 ) && ( wr_timeout != TimeoutInfinite ) )
+				{
+					// Используются оба таймаута
+					ptr = new EpollWorker<true, true>;
+				}
+				else
+				{
+					// Используется только таймаут на чтение
+					ptr = new EpollWorker<true, false>;
+				}
+			}
+			else
+			{
+				// Таймаут на чтение не используется
+				if( ( wr_timeout != 0 ) && ( wr_timeout != TimeoutInfinite ) )
+				{
+					// Используется только таймаут на запись
+					ptr = new EpollWorker<false, true>;
+				}
+				else
+				{
+					// Таймауты не используются
+					ptr = new EpollWorker<false, false>;
+				}
+			}
+			MY_ASSERT( ptr != nullptr );
+			
+			Service &srv_ref;
+			deleter_t deleter = [ &srv_ref ]( DescriptorEpollWorker *ptr ){ SrvRef.DeleteQueue.Delete( ptr ); };
+			return desc_ptr_t( ( DescriptorEpollWorker* ) ptr, deleter );
+		}
+		
+		BasicDescriptor::BasicDescriptor( uint64_t read_timeout_microsec,
+		                                  uint64_t write_timeout_microsec ):
+		    AbstractCloser(),
+		    ReadTimeoutMicrosec( read_timeout_microsec ),
+		    WriteTimeoutMicrosec( write_timeout_microsec ),
+		    Data( InitDataPtr( rd_timeout, wr_timeout ) ),
+		    TimerQueuePtr( InitTimer( read_timeout_microsec, write_timeout_microsec ) )
 		{
 			// При удалении DescriptorStruct-а shared_ptr-ом
 			// вместо собственно удаления структура будет помещена
@@ -300,12 +572,11 @@ namespace Bicycle
 
 			err = Error();
 
-			MY_ASSERT( DescriptorData );
-			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
-			if( DescriptorData->Fd != -1 )
+			MY_ASSERT( Data );
+			LockGuard<SharedSpinLock> lock( Lock );
+			if( Fd != -1 )
 			{
 				// Дескриптор уже открыт
-				MY_ASSERT( DescriptorData->Fd != -1 );
 				err.Code = ErrorCodes::AlreadyOpen;
 				err.What = "Descriptor already open";
 				return;
@@ -320,13 +591,13 @@ namespace Bicycle
 			MY_ASSERT( new_fd != -1 );
 
 			err = InitAndRegisterNewDescriptor( new_fd, DescriptorData );
-			MY_ASSERT( DescriptorData );
-			MY_ASSERT( err || ( DescriptorData->Fd == new_fd ) );
+			MY_ASSERT( Data );
+			MY_ASSERT( err || ( Fd == new_fd ) );
 			if( err )
 			{
 				Error e;
-				CloseDescriptor( DescriptorData->Fd, e );
-				DescriptorData->Fd = -1;
+				CloseDescriptor( Fd, e );
+				Fd = -1;
 				return;
 			}
 		} // void BasicDescriptor::Open( Error &err )
@@ -334,31 +605,35 @@ namespace Bicycle
 		void BasicDescriptor::Close( Error &err )
 		{
 			err = Error();
-			LockFree::ForwardList<EpWaitStruct*>::Unsafe coros;
+			LockFree::ForwardList<Coroutine*>::Unsafe coros;
+			int old_fd = -1;
 
-			MY_ASSERT( DescriptorData );
-			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
-			if( DescriptorData->Fd == -1 )
+			MY_ASSERT( Data );
 			{
-				return;
+				LockGuard<SharedSpinLock> lock( Lock );
+				if( Fd == -1 )
+				{
+					// Дескриптор уже закрыт
+					return;
+				}
+				
+				// Отменяем операции, поставленные в очередт
+				coros = Data->Cancel();
+	
+				// Закрываем старый дескриптор
+				old_fd = Fd;
+				Fd = -1;
 			}
-
-			coros.Push( DescriptorData->ReadQueue.first.Release() );
-			coros.Push( DescriptorData->WriteQueue.first.Release() );
-			coros.Push( DescriptorData->ReadOobQueue.first.Release() );
-
-			// Закрываем старый дескриптор
-			int old_fd = DescriptorData->Fd;
-			DescriptorData->Fd = -1;
+			
+			MY_ASSERT( old_fd != -1 );
 			CloseDescriptor( old_fd, err );
 
-			EpWaitStruct *ptr = nullptr;
+			Coroutine *ptr = nullptr;
 			while( coros )
 			{
 				ptr = coros.Pop();
 				MY_ASSERT( ptr != nullptr );
-				ptr->WasCancelled = true;
-				PostToSrv( ptr->CoroRef );
+				PostToSrv( *ptr );
 			}
 		} // void BasicDescriptor::Close( Error &err )
 
@@ -366,21 +641,13 @@ namespace Bicycle
 		{
 			err = Error();
 
-			MY_ASSERT( DescriptorData );
-			LockFree::ForwardList<EpWaitStruct*>::Unsafe coros;
-
-			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
-			coros.Push( DescriptorData->ReadQueue.first.Release() );
-			coros.Push( DescriptorData->WriteQueue.first.Release() );
-			coros.Push( DescriptorData->ReadOobQueue.first.Release() );
-
-			EpWaitStruct *ptr = nullptr;
+			MY_ASSERT( Data );
+			LockFree::ForwardList<Coroutine*>::Unsafe coros( Data->Cancel() );
 			while( coros )
 			{
-				ptr = coros.Pop();
+				Coroutine *ptr = coros.Pop();
 				MY_ASSERT( ptr != nullptr );
-				ptr->WasCancelled = true;
-				PostToSrv( ptr->CoroRef );
+				PostToSrv( *ptr );
 			}
 		} // void BasicDescriptor::Cancel( Error &err )
 

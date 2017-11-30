@@ -65,27 +65,21 @@ namespace Bicycle
 			/// Код ошибки
 			err_code_t ErrorCode;
 		};
-#else
-		/// Структура с данными для перехода в сопрограмму
-		struct EpWaitStruct
+#else			
+		/// Класс абстрактного обработчика срабатывания epoll
+		struct AbstractEpollWorker
 		{
-			/// Ссылка на сопрограмму, на которую надо перейти
-			Coroutine &CoroRef;
-
-			/// Параметр events от последнего epoll_event-а
-			uint64_t LastEpollEvents;
-
-			/// Задача была отменена
-			bool WasCancelled;
-
-			EpWaitStruct( Coroutine &coro_ref );
+			typedef LockFree::ForwardList<Coroutine*>::Unsafe coro_list_t;
+			virtual ~AbstractEpollWorker();
+				
+			/**
+			 * @brief Work обработка срабатывания epoll-а
+			 * @param events_mask маска событий epoll
+			 * @return список указателей на готовые
+			 * к выполнению сопрограммы
+			 */
+			virtual coro_list_t Work( uint32_t events_mask ) = 0;
 		};
-
-		/// Тип списка указателей на структуры сопрограмм
-		typedef LockFree::ForwardList<EpWaitStruct*> EpWaitList;
-
-		/// Список указателей на структуры сопрограмм + флаг срабатываний epoll-а
-		typedef std::pair<EpWaitList, std::atomic_flag> EpWaitListWithFlag;
 #endif
 		
 		/// Класс сервиса (очереди) сопрограмм
@@ -140,13 +134,6 @@ namespace Bicycle
 				
 				/// Обработка сопрограмм, добавленных через Post
 				void WorkPosted();
-				
-				/**
-				 * @brief WorkEpoll обработка готовности дескриптора
-				 * @param coros_list набор ожидающих сопрограмм
-				 * @param evs_mask маска событий epoll
-				 */
-				void WorkEpoll( EpWaitListWithFlag &coros_list, uint32_t evs_mask );
 #endif
 
 				/// Закрывает все зарегистрированные дескрипторы и удаляет их из очереди
@@ -245,33 +232,6 @@ namespace Bicycle
 		void YieldCoro();
 
 		//-------------------------------------------------------------------------------
-
-#ifndef _WIN32
-		/// Структура с данными одного дескриптора
-		struct DescriptorStruct
-		{
-			/// Системный дескриптор файла
-			int Fd;
-
-			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к чтению
-			EpWaitListWithFlag ReadQueue;
-
-			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к записи
-			EpWaitListWithFlag WriteQueue;
-
-			/// Список сопрограмм, на которые нужно перейти при готовности дескриптора к чтению внеполосных данных
-			EpWaitListWithFlag ReadOobQueue;
-			
-			/// Объект синхронизации доступа к полям структуры
-			SharedSpinLock Lock;
-		};
-#endif
-
-#ifdef _WIN32
-		typedef std::function<err_code_t( HANDLE, IocpStruct& )> IoTaskType;
-#else
-		typedef std::function<err_code_t( int )> IoTaskType;
-#endif
 
 		/// Класс, имеющий доступ к "потрохам" сервиса сопрограмм
 		class ServiceWorker

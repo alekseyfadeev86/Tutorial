@@ -78,40 +78,6 @@ namespace Bicycle
 				}
 			} // while( coros_to_exec )
 		} // void Service::WorkPosted()
-		
-		void Service::WorkEpoll( EpWaitListWithFlag &coros_list, uint32_t evs_mask )
-		{
-			coros_list.second.clear();
-			EpWaitList::Unsafe coros = coros_list.first.Release();
-			if( !coros )
-			{
-				return;
-			}
-			
-			// Запоминаем первый элемент списка
-			EpWaitStruct *ep_wait_ptr = coros.Pop();
-			MY_ASSERT( ep_wait_ptr != nullptr );
-
-			// А все остальные помещаем в Post
-			while( coros )
-			{
-				auto ptr = coros.Pop();
-				MY_ASSERT( ptr != nullptr );
-
-				// Запоминаем события epoll-а, добавляем указатель на сопрограмму в очередь
-				ptr->LastEpollEvents = evs_mask;
-				Post( &ptr->CoroRef );
-			}
-
-			// Запоминаем события epoll-а, переходим в сопрограмму
-			MY_ASSERT( ep_wait_ptr != nullptr );
-			ep_wait_ptr->LastEpollEvents = evs_mask;
-			bool coro_switch_res = ep_wait_ptr->CoroRef.SwitchTo();
-			MY_ASSERT( coro_switch_res );
-
-			// Выполняем задачу, "оставленную" дочерней сопрограммой
-			ExecLeftTasks();
-		} // void Service::WorkEpoll( EpWaitList &coros_list, uint32_t evs_mask )
 
 		void Service::Initialize()
 		{
@@ -217,8 +183,8 @@ namespace Bicycle
 
 				for( uint8_t ev_num = 0, evs_count = res; ev_num < evs_count; ++ev_num )
 				{
-					DescriptorStruct *ptr = ( DescriptorStruct* ) events_data[ ev_num ].data.ptr;
-					if( ptr == nullptr )
+					AbstractEpollWorker *worker_ptr = ( AbstractEpollWorker* ) events_data[ ev_num ].data.ptr;
+					if( worker_ptr == nullptr )
 					{
 						// Событие на PostPipe[ 0 ]: считываем байт,
 						// чтобы epoll перестал срабатывать на канал
@@ -227,38 +193,27 @@ namespace Bicycle
 						continue;
 					} // if( ptr == nullptr )
 					
-					// События готовности на одном из дескрипторов
-					static const uint32_t ErrMask = EPOLLERR | EPOLLHUP | EPOLLRDHUP;
-					static const uint32_t TaskMask = EPOLLIN | EPOLLOUT | EPOLLPRI;
-
-					uint32_t evs = events_data[ ev_num ].events;
-					if( ( evs & ErrMask ) != 0 )
+					// События готовности на одном из дескрипторов: обрабатываем
+					auto coros = worker_ptr->Work( events_data[ ev_num ].events );
+					
+					Coroutine *coro_ptr = nullptr;
+					while( coros )
 					{
-						// Есть события ошибки - дёргаем все сопрограммы-"ждуны"
-						// (ожидающие готовности на чтение, запись и чтение
-						// внеполосных данных, пусть сами разбираются с ошибками)
-						evs = TaskMask;
-					}
-					else
-					{
-						// Ошибок нет, отсекаем только нужные нам события
-						evs &= TaskMask;
-					}
-					MY_ASSERT( ( evs & ErrMask ) == 0 );
-
-					if( ( evs & EPOLLIN ) != 0 )
-					{
-						WorkEpoll( ptr->ReadQueue, evs );
-					}
-
-					if( ( evs & EPOLLOUT ) != 0 )
-					{
-						WorkEpoll( ptr->WriteQueue, evs );
-					}
-
-					if( ( evs & EPOLLPRI ) != 0 )
-					{
-						WorkEpoll( ptr->ReadOobQueue, evs );
+						coro_ptr = coros.Pop();
+						MY_ASSERT( coro_ptr != nullptr );
+						
+						if( coros )
+						{
+							Post( coro_ptr );
+						}
+						else
+						{
+							bool res = coro_ptr->SwitchTo();
+							MY_ASSERT( res );
+							
+							// Выполняем задачу, "оставленную" дочерней сопрограммой
+							ExecLeftTasks();
+						}
 					}
 				} // for( uint8_t ev_num = 0, evs_count = res; ev_num < evs_count; ++t )
 				
@@ -272,8 +227,5 @@ namespace Bicycle
 
 		//-------------------------------------------------------------------------------
 
-		EpWaitStruct::EpWaitStruct( Coroutine &coro_ref ): CoroRef( coro_ref ),
-		                                                   LastEpollEvents( 0 ),
-		                                                   WasCancelled( false ) {}
 	} // namespace CoroService
 } // namespace Bicycle
