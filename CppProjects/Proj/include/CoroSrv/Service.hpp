@@ -30,7 +30,7 @@ namespace Bicycle
 		const err_code_t SrvStop = 0xFFFFFFF4;
 
 		/// Операция отменена
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		const err_code_t OperationAborted = ERROR_OPERATION_ABORTED;
 #else
 		const err_code_t OperationAborted = 0xFFFFFFF5;
@@ -49,7 +49,7 @@ namespace Bicycle
 		typedef std::shared_ptr<PtrWithLocker> BaseDescPtr;
 		typedef std::weak_ptr<PtrWithLocker> BaseDescWeakPtr;
 		
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		/// Структура с данными, возвращаемая Iocp
 		struct IocpStruct
 		{
@@ -113,7 +113,7 @@ namespace Bicycle
 				/// Флаг, показывающий необходимость очистки пустых указателей из Descriptors
 				std::atomic<bool> NeedToClearDescriptors;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				/// Дескриптор порта завершения ввода-вывода
 				HANDLE Iocp;
 #else
@@ -262,6 +262,12 @@ namespace Bicycle
 				bool IsStopped() const;
 		};
 
+		/**
+		 * @brief The AbstractCloser class абстрактный класс,
+		 * имеющий метод Close. При создании объекта, пронаследованного
+		 * от этого класса, он регистрируется в соответствующем объекте
+		 * сервиса и при остановке сервиса будет вызван метод Close.
+		 */
 		class AbstractCloser: public ServiceWorker
 		{
 			private:
@@ -285,6 +291,89 @@ namespace Bicycle
 				 * @throw Exception в случае ошибки
 				 */
 				void Close();
+		};
+		
+		/// Сосотяние задачи
+		enum TaskState {
+			InProc = 0, // В процессе
+			Worked = 1, // Выполнена
+			Cancelled = 2, // Отменена
+			TimeoutExpired = 3 // Превышение таймаута
+		};
+		
+		/**
+		 * @brief The CoroKeeper class "хранитель" сопрограммы
+		 * (нужен, чтобы только один поток мог получить доступ
+		 * к сопрограмме)
+		 */
+		class CoroKeeper
+		{
+			private:
+				/// Указатель на хранимую сопрограмму
+				std::atomic<Coroutine*> CoroPtr;
+				
+				/// Текущее состояние задачи сопрограммы
+				std::atomic<uint8_t> State;
+				
+				Coroutine* ChangeState( TaskState new_state );
+				
+			public:
+				CoroKeeper( const CoroKeeper& ) = delete;
+				CoroKeeper& operator=( const CoroKeeper& ) = delete;
+				
+				/**
+				 * @brief CoroKeeper конструктор
+				 * @param coro_ptr хранимый указатель на сопрограмму
+				 */
+				CoroKeeper( Coroutine *coro_ptr );
+				~CoroKeeper();
+				
+				/// Получение текущего состояния задачи
+				TaskState GetState() const;
+				
+				/**
+				 * @brief MarkWorked помечает задачу сопрограммы как
+				 * выполненную (если не было отметок)
+				 * @return указатель на сопрограмму, если не было иных
+				 * отметок и никто не "захватил" сопрограмму,
+				 * иначе - nullptr
+				 */
+				Coroutine* MarkWorked();
+				
+				/**
+				 * @brief MarkCancel помечает задачу сопрограммы как
+				 * отменённую (если не было отметок)
+				 * @return указатель на сопрограмму, если не было иных
+				 * отметок и никто не "захватил" сопрограмму,
+				 * иначе - nullptr
+				 */
+				Coroutine* MarkCancel();
+				
+				/**
+				 * @brief MarkTimeout помечает задачу сопрограммы как
+				 * "просроченную" (если не было отметок)
+				 * @return указатель на сопрограмму, если не было иных
+				 * отметок и никто не "захватил" сопрограмму,
+				 * иначе - nullptr@return 
+				 */
+				Coroutine* MarkTimeout();
+				
+				/**
+				 * @brief Release "захватывает" владение сопрограммой
+				 * (обнуляет CoroPtr и возвращает хранимый указатель)
+				 * @return указатель на хранимую сопрограмму,
+				 * если никто не поставил отметку о готовности и никто
+				 * не вызвал Release
+				 */
+				Coroutine* Release();
+				
+				/**
+				 * @brief Reset настройка хранимого указателя на сопрограмму
+				 * @param new_coro ссылка на новую сопрограмму для хранения
+				 * @return true в случае успеха, иначе false (в этом случае
+				 * new_coro должна обрабатываться тем, кто вызвал метод)
+				 */
+				bool Reset( Coroutine &new_coro );
 		};
 	} // namespace CoroService
 } // namespace Bicycle

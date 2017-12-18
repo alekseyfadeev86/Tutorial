@@ -7,7 +7,7 @@ namespace Bicycle
 	{
 		ThreadLocal::ThreadLocal()
 		{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			Key = TlsAlloc();
 			if( Key == TLS_OUT_OF_INDEXES )
 			{
@@ -21,7 +21,7 @@ namespace Bicycle
 
 		ThreadLocal::~ThreadLocal()
 		{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			BOOL res = TlsFree( Key );
 			MY_ASSERT( res != 0 );
 #else
@@ -34,7 +34,7 @@ namespace Bicycle
 		{
 			void *res = nullptr;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			res = TlsGetValue( Key );
 			if( res == 0 )
 			{
@@ -50,7 +50,7 @@ namespace Bicycle
 
 		void ThreadLocal::Set( void *ptr )
 		{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			if( TlsSetValue( Key, ptr ) == FALSE )
 			{
 				ThrowIfNeed();
@@ -87,7 +87,7 @@ namespace Bicycle
 
 		ThreadLocal Coroutine::Internal;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		VOID CALLBACK Coroutine::CoroutineFunc( PVOID param )
 #else
 		Coroutine::Array::Array( size_t sz ): Ptr( sz > 0 ? new char[ sz ] : nullptr ), Sz( sz )
@@ -157,7 +157,7 @@ namespace Bicycle
 				                 "Cannot convert coroutine to coroutine" );
 			}
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			// Преобразуем текущий поток в волокно
 			FiberPtr = ConvertThreadToFiber( nullptr );
 			if( FiberPtr == NULL )
@@ -187,7 +187,7 @@ namespace Bicycle
 
 		inline size_t EditStackSize( size_t stack_sz )
 		{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			// Если 0 - размер стека будет выбран CreateFiber-ом автоматически
 			return stack_sz > 10*1024 ? stack_sz : 0;
 #else
@@ -198,7 +198,7 @@ namespace Bicycle
 		Coroutine::Coroutine( CoroTaskType task,
 							  size_t stack_sz ): StateFlag( 0 ),
 		                                         CreatedFromThread( false ), Started( false )
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 		                                         , Stack( EditStackSize( stack_sz ) )
 #endif
 		{
@@ -211,7 +211,7 @@ namespace Bicycle
 			CoroFuncParams.first = std::move( task );
 			CoroFuncParams.second = this;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			// Создаём новое волокно
 			FiberPtr = CreateFiber( EditStackSize( stack_sz ), &CoroutineFunc, &CoroFuncParams );
 			if( FiberPtr == NULL )
@@ -246,7 +246,7 @@ namespace Bicycle
 
 			MY_ASSERT( is_cur_coro == ( ( InProgressFlag & state_flag ) == InProgressFlag ) );
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			MY_ASSERT( FiberPtr != nullptr );
 #else
 			MY_ASSERT( CreatedFromThread == ( Stack.Ptr == nullptr ) );
@@ -270,7 +270,7 @@ namespace Bicycle
 				Internal.Set( nullptr );
 				delete coro_info;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				// Преобразуем волокно в поток
 				BOOL res = ConvertFiberToThread();
 				MY_ASSERT( res != FALSE );
@@ -286,7 +286,7 @@ namespace Bicycle
 					std::terminate();
 				}
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				// Удаляем волокно
 				DeleteFiber( FiberPtr );
 #endif
@@ -330,7 +330,7 @@ namespace Bicycle
 			// Нужно, чтобы обращаться к объекту после смены контекста
 			coro_info->NextCoro = this;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			// Если поток ещё не вызывал её - не сможем перейти на другую сопрограмму
 			//ConvertThreadToFiber( nullptr );
 			MY_ASSERT( ConvertThreadToFiber( nullptr ) == NULL );

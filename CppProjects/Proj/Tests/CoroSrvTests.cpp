@@ -14,7 +14,7 @@
 	#include <assert.h>
 #endif
 
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <pthread.h>

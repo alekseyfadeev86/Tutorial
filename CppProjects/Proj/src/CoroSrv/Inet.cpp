@@ -1,6 +1,6 @@
 #include "CoroSrv/Inet.hpp"
 
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 #include <string.h> // Для memset
 #endif
 

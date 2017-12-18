@@ -4,6 +4,7 @@
 
 namespace Bicycle
 {
+#error "учесть неблокирующие операции"
 	namespace CoroService
 	{
 		inline err_code_t GetLastSockErrorCode()

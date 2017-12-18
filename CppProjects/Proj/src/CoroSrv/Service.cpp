@@ -1,6 +1,6 @@
 #include "CoroSrv/Service.hpp"
 
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 #include <unistd.h> // для read
 #endif
 
@@ -46,8 +46,6 @@ namespace Bicycle
 			auto desc = Descriptors.Release();
 			Error err;
 
-			// Вызываем RemoveIf только для перебора всех элементов,
-			// ни один из них удалён не будет
 			desc.RemoveIf( [ &err ]( const BaseDescWeakPtr &elem ) -> bool
 			{
 				auto ptr = elem.lock();
@@ -169,7 +167,7 @@ namespace Bicycle
 		                    WorkThreadsCount( 0 ),
 							DescriptorsDeleteCount( 0 ),
 							NeedToClearDescriptors( false )
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 							, DeleteQueue( 0xFF, 0x100 ),
 							CoroListNum( 0 )
 #endif
@@ -238,7 +236,7 @@ namespace Bicycle
 
 			MY_ASSERT( CoroCount.load() == 0 );
 
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 			char buf[ 100 ] = { 0 };
 			int read_res = -1;
 			for( Error err; err.Code != EAGAIN; err = GetLastSystemError() )
@@ -503,5 +501,91 @@ namespace Bicycle
 			Close( err );
 			ThrowIfNeed( err );
 		}
+
+		//------------------------------------------------------------------------------
+		
+		static const uint8_t InitState = ( uint8_t ) TaskState::InProc;
+		
+		Coroutine* CoroKeeper::ChangeState( TaskState new_state )
+		{
+			const uint8_t new_val = ( uint8_t ) new_state;			
+			uint8_t expected = InitState;
+			
+			// Меняем текущее состояние только, если
+			// оно имеет значение "В процессе"
+			if( State.compare_exchange_strong( expected, new_val ) )
+			{
+				return CoroPtr.exchange( nullptr );
+			}
+			
+			return nullptr;
+		} // Coroutine* CoroKeeper::ChangeState( TaskState new_state )
+		
+		CoroKeeper::CoroKeeper( Coroutine *coro_ptr ): CoroPtr( coro_ptr ),
+		                                               State( InitState )
+		{
+			MY_ASSERT( CoroPtr.load() == coro_ptr );
+			MY_ASSERT( State.load() == ( uint8_t ) TaskState::InProc );
+		}
+		
+		CoroKeeper::~CoroKeeper()
+		{
+			MY_ASSERT( CoroPtr.load() == nullptr );
+		}
+		
+		TaskState CoroKeeper::GetState() const
+		{
+			MY_ASSERT( State.load() < 4 );
+			return TaskState( State.load() );
+		}
+		
+		Coroutine* CoroKeeper::MarkWorked()
+		{
+			return ChangeState( TaskState::Worked );
+		}
+		
+		Coroutine* CoroKeeper::MarkCancel()
+		{
+			return ChangeState( TaskState::Cancelled );
+		}
+		
+		Coroutine* CoroKeeper::MarkTimeout()
+		{
+			return ChangeState( TaskState::TimeoutExpired );
+		}
+		
+		Coroutine* CoroKeeper::Release()
+		{
+			return CoroPtr.exchange( nullptr );
+		}
+		
+		bool CoroKeeper::Reset( Coroutine &new_coro )
+		{
+			if( State.load() != InitState )
+			{
+				// Кто-то уже пометил задачу как неактивную
+				// (выполненная, "просроченная" или отменённая)
+				return false;
+			}
+			
+			Coroutine *expected = nullptr;
+			if( !CoroPtr.compare_exchange_strong( expected, &new_coro ) )
+			{
+				// Указатель на сопрограмму был ненулевым (что странно)
+				MY_ASSERT( false );
+				return false;
+			}
+			
+			if( State.load() != InitState )
+			{
+				// Кто-то уже пометил задачу как неактивную
+				// (выполненная, "просроченная" или отменённая)
+				MY_ASSERT( CoroPtr.exchange( nullptr ) == &new_coro );
+				CoroPtr.exchange( nullptr );
+				return false;
+			}
+			
+			return true;
+		} // bool CoroKeeper::Reset( Coroutine &new_coro )
 	} // namespace CoroService
 } // namespace Bicycle

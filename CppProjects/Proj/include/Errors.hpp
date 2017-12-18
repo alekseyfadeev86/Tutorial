@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 #include <Windows.h>
 #endif
 
@@ -21,7 +21,7 @@ namespace Bicycle
 {
 	using std::string;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 	typedef DWORD err_code_t;
 #else
 	typedef int err_code_t;
@@ -30,7 +30,7 @@ namespace Bicycle
 
 	namespace ErrorCodes
 	{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		/// Успех
 		const err_code_t Success = ERROR_SUCCESS;
 #else

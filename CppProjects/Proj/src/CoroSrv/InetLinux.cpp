@@ -68,10 +68,9 @@ namespace Bicycle
 
 		void BasicSocket::Bind( const Ip4Addr &addr, Error &err )
 		{
-			MY_ASSERT( DescriptorData );
-			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
-
-			int bind_res = bind( DescriptorData->Fd,
+			MY_ASSERT( Data );
+			SharedLockGuard<SharedSpinLock> lock( Lock );
+			int bind_res = bind( Fd,
 			                     ( struct sockaddr* ) &addr.Addr,
 			                     ( socklen_t ) sizeof( addr.Addr ) );
 			err = bind_res != 0 ? GetLastSystemError() : Error();
@@ -266,9 +265,9 @@ namespace Bicycle
 
 		void TcpAcceptor::Listen( uint16_t backlog, Error &err )
 		{
-			MY_ASSERT( DescriptorData );
-			LockGuard<SharedSpinLock> lock( DescriptorData->Lock );
-			err = listen( DescriptorData->Fd, ( int ) backlog ) == 0 ? Error() : GetLastSystemError();
+			MY_ASSERT( Data );
+			SharedLockGuard<SharedSpinLock> lock( Lock );
+			err = listen( Fd, ( int ) backlog ) == 0 ? Error() : GetLastSystemError();
 		}
 
 		void TcpAcceptor::Accept( TcpConnection &conn, Ip4Addr &addr, Error &err )
@@ -297,20 +296,22 @@ namespace Bicycle
 				// Новое соединение успешно принято
 				MY_ASSERT( new_conn != -1 );
 
-				MY_ASSERT( conn.DescriptorData );
-				LockGuard<SharedSpinLock> lock( conn.DescriptorData->Lock );
-				if( conn.DescriptorData->Fd == -1 )
+				MY_ASSERT( conn.Data );
+				LockGuard<SharedSpinLock> lock( conn.Lock );
+				if( conn.Fd == -1 )
 				{
-					err = InitAndRegisterNewDescriptor( new_conn, conn.DescriptorData );
-					MY_ASSERT( conn.DescriptorData );
-					MY_ASSERT( err || ( conn.DescriptorData->Fd == new_conn ) );
+					err = InitAndRegisterNewDescriptor( new_conn, *conn.Data );
+					MY_ASSERT( conn.Data );
 					if( err )
 					{
 						// Ошибка привязки нового соединения к epoll-у
 						Error e;
-						CloseDescriptor( conn.DescriptorData->Fd, e );
-						conn.DescriptorData->Fd = -1;
+						CloseDescriptor( new_conn, e );
+						conn.Fd = -1;
+						return;
 					}
+					
+					conn.Fd = new_conn;
 				}
 				else
 				{

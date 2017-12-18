@@ -20,7 +20,7 @@ namespace Bicycle
 			return Error();
 		} // Error BasicDescriptor::RegisterNewDescriptor( HANDLE fd )
 
-		Error BasicDescriptor::ExecuteIoTask( const IoTaskType &task, size_t &io_size )
+		Error BasicDescriptor::ExecuteIoTask( const IoTaskType &task, size_t &io_size, uint64_t timeout_msec )
 		{
 			if( SrvRef.MustBeStopped.load() )
 			{
@@ -34,14 +34,50 @@ namespace Bicycle
 				throw std::invalid_argument( "Incorrect I/O task" );
 			}
 
-			IocpStruct task_struct;
+			IocpStruct io_task_struct_stat;
+			std::shared_ptr<IocpStruct> io_task_struct_ptr;
+
+			// Необходимо хранить указатель на таймер именно здесь, а не в coro_task-е,
+			// чтобы он 100% был жив, пока задача не завершится, либо не будет отменена
+			const auto timer_ptr = ( timeout_msec != Infinite ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
+			TimeTasksQueue::task_type timer_task_ptr;
+
+			if( timer_ptr )
+			{
+				// Формируем задачу для таймера
+				MY_ASSERT( timeout_msec != Infinite );
+				io_task_struct_ptr.reset( new IocpStruct );
+				const std::weak_ptr<IocpStruct> io_task_struct_wptr( io_task_struct_ptr );
+
+				auto timer_task = [ fd, io_task_struct_wptr ]()
+				{
+					auto ptr = io_task_struct_wptr.lock();
+					if( ptr )
+					{
+						// Отменяем задачу ввода-вывода
+						BOOL res = CancelIoEx( fd, ( LPOVERLAPPED ) ptr.get() );
+						MY_ASSERT( ( res != FALSE ) || ( WSAGetLastError() == ERROR_NOT_FOUND ) || ( WSAGetLastError() == ERROR_INVALID_HANDLE ) );
+					}
+				};
+					
+				timer_task_ptr.reset( new CancellableTask( timer_task ) );
+			} // if( timer_ptr )
+
+			MY_ASSERT( ( bool ) io_task_struct_ptr == ( bool ) timer_ptr );
+			MY_ASSERT( ( bool ) io_task_struct_ptr == ( bool ) timer_task_ptr );
+			MY_ASSERT( ( bool ) io_task_struct_ptr == ( timeout_msec != Infinite ) );
+
+			IocpStruct &task_struct = io_task_struct_ptr ? *io_task_struct_ptr : io_task_struct_stat;
 			memset( ( void* ) &task_struct.Ov, 0, sizeof( task_struct.Ov ) );
 			task_struct.ErrorCode = ErrorCodes::Success;
 			task_struct.Coro = GetCurrentCoro();
 			task_struct.IoSize = 0;
 			
-			std::function<void()> coro_task = [ &task, &task_struct, this ]()
+			std::function<void()> coro_task = [ &task, &task_struct, this, timeout_msec, timer_task_ptr, timer_ptr ]()
 			{
+				MY_ASSERT( ( timeout_msec == Infinite ) != ( bool ) timer_task_ptr );
+				MY_ASSERT( ( bool ) timer_task_ptr == ( bool ) timer_ptr );
+
 				err_code_t err;
 				{
 					SharedLockGuard<SharedSpinLock> lock( FdLock );
@@ -61,10 +97,22 @@ namespace Bicycle
 				{
 					// Ошибка выполнения - ожидание Iocp не сработает на неё,
 					// возвращаемся обратно в сопрограмму
+					timer_ptr.reset();
+					timer_task_ptr.reset();
 					task_struct.ErrorCode = err;
 					bool res = task_struct.Coro->SwitchTo();
 					MY_ASSERT( res );
+					return;
 				}
+				else if( timer_ptr )
+				{
+					// Взводим таймер отмены операции
+					MY_ASSERT( timeout_msec != Infinite );
+					MY_ASSERT( timer_task_ptr );
+					timer_ptr->Post( timer_task_ptr, timeout_msec );
+				}
+
+				// Задача ещё не выполнена, результат будет получен через IOCP
 			};
 			
 			// Переходим в основную сопрограмму, выполняем там задачу и затем, когда будет готов результат, возвращаемся обратно
@@ -77,6 +125,15 @@ namespace Bicycle
 			}
 
 			io_size = task_struct.IoSize;
+
+			if( timer_task_ptr )
+			{
+				// Отменяем задачу таймера, если она ещё не была выполнена
+				MY_ASSERT( timer_ptr );
+				timer_task_ptr->Cancel();
+				timer_task_ptr.reset();
+			}
+
 			return err;
 		}
 

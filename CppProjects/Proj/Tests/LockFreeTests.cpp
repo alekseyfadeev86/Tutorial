@@ -946,7 +946,7 @@ void lock_free_tests()
 {
 	// Проверка контейнеров
 #ifdef _DEBUG
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 	printf( "Lockfree containers testing\n" );
 #else
 	printf( "Проверка неблокирующих контейнеров\n" );
@@ -955,7 +955,7 @@ void lock_free_tests()
 #endif
 
 	//for( uint16_t t = 0; t < 1000; ++t )
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 	for( uint16_t t = 0; t < 0x10; ++t )
 #else
 	for( uint16_t t = 0; t < 0x100; ++t )
@@ -967,7 +967,7 @@ void lock_free_tests()
 		if( false )
 #endif
 		{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 			printf( "Multithread debug, step %i\n", t + 1 );
 #else
 			printf( "Многопоточная отладка, шаг %i\n", t + 1 );
@@ -979,7 +979,7 @@ void lock_free_tests()
 	}
 
 #ifdef _DEBUG
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 	printf( "Lockfree test finished\n" );
 //	printf( "Lockfree test finished.Press enter to finish\n" );
 #else

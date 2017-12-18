@@ -14,6 +14,9 @@ namespace Bicycle
 		const uint32_t TaskWorkMask = 0x2;
 		const uint32_t DefEventMask = EPOLLET | EPOLLRDHUP;
 
+		AbstractEpollWorker::~AbstractEpollWorker()
+		{}
+
 		inline void CheckOperationSuccess( int res )
 		{
 			if( res != 0 )

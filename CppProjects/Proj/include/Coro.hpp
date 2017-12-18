@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 #include <Windows.h>
 #else
 #include <ucontext.h>
@@ -32,7 +32,7 @@ namespace Bicycle
 		class ThreadLocal
 		{
 			private:
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				DWORD Key;
 #else
 				pthread_key_t Key;
@@ -79,7 +79,7 @@ namespace Bicycle
 				/// Параметры функции сопрограммы
 				coro_func_params_t CoroFuncParams;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				/// Указатель на волокно, соответствующее сопрограмме
 				LPVOID FiberPtr;
 

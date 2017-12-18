@@ -2,7 +2,7 @@
 
 #include "BasicDescriptor.hpp"
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 #pragma comment(lib, "ws2_32.lib")
 #else
 #include <arpa/inet.h>
@@ -15,7 +15,7 @@ namespace Bicycle
 	namespace CoroService
 	{
 		using std::string;
-
+#error "переписать с учётом таймаута, дописать проверки"
 		/// Структура адреса Ip4 для функций обмена данными по сети
 		struct Ip4Addr
 		{
@@ -71,7 +71,7 @@ namespace Bicycle
 		class BasicSocket: public BasicDescriptor
 		{
 			protected:
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				/// Открывает и возвращает новый дескриптор, записывает ошибку в err
 				virtual HANDLE OpenNewDescriptor( Error &err ) override final;
 
@@ -117,7 +117,7 @@ namespace Bicycle
 		class UdpSocket: public BasicSocket
 		{
 			protected:
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				/// Вызывает C-шную функцию socket для создания сокета UDP
 				virtual SOCKET CreateNewSocket() override final;
 #else
@@ -173,7 +173,7 @@ namespace Bicycle
 		class TcpSocket: public BasicSocket
 		{
 			protected:
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 				/// Вызывает C-шную функцию socket для создания сокета UDP
 				virtual SOCKET CreateNewSocket() override final;
 #else

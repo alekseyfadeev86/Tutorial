@@ -1,7 +1,7 @@
 #include "Errors.hpp"
 #include <string.h>
 
-#ifndef _WIN32
+#if !(defined( _WIN32) || defined(_WIN64))
 #include <errno.h>
 #endif
 
@@ -9,7 +9,7 @@ namespace Bicycle
 {
 	inline string StrErrorByCode( err_code_t err_code )
 	{
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		char res[ 501 ] = { 0 };
 		if( FormatMessageA( FORMAT_MESSAGE_FROM_SYSTEM,
 		    0, err_code, MAKELANGID( LANG_ENGLISH, SUBLANG_ENGLISH_US ),
@@ -83,7 +83,7 @@ namespace Bicycle
 	{
 		err_code_t err = 0;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		err = GetLastError();
 		SetLastError( ERROR_SUCCESS );
 #else
@@ -98,7 +98,7 @@ namespace Bicycle
 	{
 		err_code_t err = 0;
 
-#ifdef _WIN32
+#if defined( _WIN32) || defined(_WIN64)
 		err = GetLastError();
 		SetLastError( ERROR_SUCCESS );
 #else
