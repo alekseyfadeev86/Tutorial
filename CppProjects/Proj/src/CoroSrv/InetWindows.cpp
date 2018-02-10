@@ -4,7 +4,6 @@
 
 namespace Bicycle
 {
-#error "учесть неблокирующие операции"
 	namespace CoroService
 	{
 		inline err_code_t GetLastSockErrorCode()
@@ -24,7 +23,8 @@ namespace Bicycle
 
 		string Ip4Addr::GetIp( Error &err ) const
 		{
-			err = Error();
+			err.Reset();
+
 			char res[ 21 ];
 			if( inet_ntop( AF_INET, ( void* ) &Addr.sin_addr, res, 21 ) == nullptr )
 			{
@@ -37,6 +37,8 @@ namespace Bicycle
 
 		void Ip4Addr::SetIp( const string &ip, Error &err )
 		{
+			err.Reset();
+
 			INT res = inet_pton( AF_INET, ip.c_str(), ( void* ) &Addr.sin_addr );
 			if( res == 1 )
 			{
@@ -44,7 +46,6 @@ namespace Bicycle
 				return;
 			}
 
-			err = Error();
 			if( res == 0 )
 			{
 				// Неверное значение ip
@@ -60,6 +61,7 @@ namespace Bicycle
 
 		HANDLE BasicSocket::OpenNewDescriptor( Error &err )
 		{
+			err.Reset();
 			SOCKET new_sock = CreateNewSocket();
 			if( new_sock == INVALID_SOCKET )
 			{
@@ -68,7 +70,6 @@ namespace Bicycle
 				return INVALID_HANDLE_VALUE;
 			}
 
-			err = Error();
 			return ( HANDLE ) new_sock;
 		}
 
@@ -77,7 +78,10 @@ namespace Bicycle
 			err = closesocket( ( SOCKET ) fd ) == 0 ? Error() : GetLastSockError();
 		}
 
-		BasicSocket::BasicSocket()
+		BasicSocket::BasicSocket( uint64_t read_timeout_microsec,
+		                          uint64_t write_timeout_microsec ):
+		    BasicDescriptor( read_timeout_microsec,
+		                     write_timeout_microsec )
 		{
 			WSADATA wsa_data;
 			ThrowIfNeed( GetSystemErrorByCode( WSAStartup( MAKEWORD( 2, 2 ), &wsa_data ) ) );
@@ -142,7 +146,7 @@ namespace Bicycle
 				                        ( LPWSAOVERLAPPED ) &task_struct, nullptr );
 				return i_res != 0 ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
-			err = ExecuteIoTask( task, res );
+			err = ExecuteIoTask( task, res, WriteTimeoutMicrosec );
 
 			return res;
 		}
@@ -173,7 +177,7 @@ namespace Bicycle
 
 				return i_res != 0 ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
-			err = ExecuteIoTask( task, res );
+			err = ExecuteIoTask( task, res, ReadTimeoutMicrosec );
 
 			return res;
 		}
@@ -213,7 +217,7 @@ namespace Bicycle
 				return i_res == FALSE ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
 			size_t fake_sz = 0;
-			err = ExecuteIoTask( task, fake_sz );
+			err = ExecuteIoTask( task, fake_sz, WriteTimeoutMicrosec );
 		} // void TcpConnection::Connect( const Ip4Addr &addr, Error &err )
 
 		size_t TcpConnection::Send( const ConstBufferType &data, Error &err )
@@ -238,7 +242,7 @@ namespace Bicycle
 
 				return i_res != 0 ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
-			err = ExecuteIoTask( task, res );
+			err = ExecuteIoTask( task, res, WriteTimeoutMicrosec );
 
 			return res;
 		}
@@ -267,7 +271,7 @@ namespace Bicycle
 
 				return i_res != 0 ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
-			err = ExecuteIoTask( task, res );
+			err = ExecuteIoTask( task, res, ReadTimeoutMicrosec );
 
 			return res;
 		}
@@ -322,7 +326,7 @@ namespace Bicycle
 				return i_res == FALSE ? GetLastSockErrorCode() : ErrorCodes::Success;
 			};
 			size_t fake_sz = 0;
-			err = ExecuteIoTask( task, fake_sz );
+			err = ExecuteIoTask( task, fake_sz, ReadTimeoutMicrosec );
 
 			if( !err )
 			{

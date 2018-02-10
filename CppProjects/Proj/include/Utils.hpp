@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <condition_variable>
@@ -345,7 +346,8 @@ namespace Bicycle
 			typedef std::weak_ptr<CancellableTask> task_weak_type;
 
 		private:
-			typedef std::chrono::system_clock ClockType;
+			typedef std::chrono::system_clock clock_type;
+			typedef std::chrono::time_point<clock_type> time_point_type;
 			
 			/// Флаг, показывающий, нужно ли продолжать работу
 			std::atomic<bool> RunFlag;
@@ -356,8 +358,7 @@ namespace Bicycle
 			std::condition_variable Cv;
 			std::mutex Mut;
 
-			typedef std::chrono::time_point<ClockType> time_type;
-			typedef std::pair<time_type, task_type> elem_type;
+			typedef std::pair<time_point_type, task_type> elem_type;
 
 			/// Задачи для таймера
 			LockFree::ForwardList<elem_type> Tasks;
@@ -367,18 +368,56 @@ namespace Bicycle
 
 			TimeTasksQueue();
 			
+			/**
+			 * @brief PostAt добавление задачи в очередь таймера
+			 * @param task задача
+			 * @param tp момент времени, в который должна сработать задача
+			 */
+			void PostAt( const task_type &task,
+			             const time_point_type &tp );
+			
 		public:
 			static std::shared_ptr<TimeTasksQueue> GetQueue();
 			
 			~TimeTasksQueue();
-
+			
 			/**
-			 * @brief Post добавление задачи в очередь таймера
+			 * @brief ExecuteAfter добавление задачи в очередь таймера,
+			 * чтобы была выполнена с нужной задержкой
 			 * @param task задача
-			 * @param timeout_microsec время (в микросекундах)
-			 * спустя которое задача должна быть выполнена
+			 * @param tp момент времени, в который должна сработать задача
 			 */
-			void Post( const task_type &task,
-			           uint64_t timeout_microsec );
+			template<typename _Rep, typename _Period>
+			inline void ExecuteAfter( const task_type &task,
+			                          const std::chrono::duration<_Rep, _Period> &timeout )
+			{
+				const auto dt = std::chrono::duration_cast<time_point_type::duration>( timeout );
+				PostAt( task, clock_type::now() + dt );
+			}
+			
+			/**
+			 * @brief ExecuteAt добавление задачи в очередь таймера,
+			 * чтобы была выполнена в нужный момент времени
+			 * @param task задача
+			 * @param tp момент времени, в который должна сработать задача
+			 */
+			template<typename _Clock, typename _Duration>
+			inline void ExecuteAt( const task_type &task,
+			                       const std::chrono::time_point<_Clock, _Duration> &tp )
+			{
+				ExecuteAfter( task, tp - _Clock::now() );
+			}
+			
+			/**
+			 * @brief ExecuteAt добавление задачи в очередь таймера,
+			 * чтобы была выполнена в нужный момент времени
+			 * @param task задача
+			 * @param tp момент времени, в который должна сработать задача
+			 */
+			inline void ExecuteAt( const task_type &task,
+			                       const time_point_type &tp )
+			{
+				PostAt( task, tp );
+			}
 	};
 } // namespace Bicycle

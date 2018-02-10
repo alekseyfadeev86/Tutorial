@@ -159,7 +159,7 @@ namespace LockFree
 		}
 
 		/**
-		 * @brief Push добавление новых элементов в начало однонаправленного списка
+		 * @brief PushHead добавление новых элементов в начало однонаправленного списка
 		 * @param head ссылка на головной элемент списка
 		 * @param new_head новый головной элемент (должен быть не nullptr)
 		 * @param add_only_one если true - добавляется только new_head,
@@ -191,6 +191,44 @@ namespace LockFree
 			}
 
 			MY_ASSERT( false );
+			return false;
+		}
+		
+		/**
+		 * @brief TryPushHead добавление новых элементов в начало однонаправленного списка
+		 * при условии, что он пуст
+		 * @param head ссылка на головной элемент списка
+		 * @param new_head новый головной элемент (должен быть не nullptr)
+		 * @param add_only_one если true - добавляется только new_head,
+		 * иначе - все элементы, что стоят за new_head-ом
+		 * @return был ли новый элемент добавлен (если нет - список уже был не пуст)
+		 * @throw std::invalid_argument, если new_head == nullptr
+		 */
+		template <typename T>
+		bool TryPushHead( std::atomic<StructElementType<T>*> &head,
+		                  std::unique_ptr<StructElementType<T>> &new_head,
+		                  bool add_only_one = true )
+		{
+			if( !new_head )
+			{
+				MY_ASSERT( false );
+				throw std::invalid_argument( "New head cannot be nullptr" );
+			}
+			
+			StructElementType<T> *new_bottom = add_only_one ? new_head.get() : GetBottom( new_head.get() );
+			MY_ASSERT( new_bottom != nullptr );
+
+			StructElementType<T> *old_head = nullptr;
+			new_bottom->Next.store( old_head );
+			if( head.compare_exchange_strong( old_head, new_head.get() ) )
+			{
+				// Удалось
+				new_head.release();
+				return true;
+			}
+			
+			// Список был не пуст
+			new_bottom->Next.store( nullptr );
 			return false;
 		}
 	} // namespace internal
@@ -286,20 +324,9 @@ namespace LockFree
 			 * @brief Push Добавление элемента в начало списка
 			 * @param new_val новое значение
 			 */
-			void Push( const T &new_val )
+			void Push( T new_val )
 			{
-				ElementType *new_element = new ElementType( new_val );
-				new_element->Next = Top;
-				Top = new_element;
-			}
-
-			/**
-			 * @brief Push Добавление элемента в начало списка
-			 * @param new_val новое значение
-			 */
-			void Push( T &&new_val )
-			{
-				ElementType *new_element = new ElementType( std::move( new_val ) );
+				ElementType *new_element = new ElementType( std::forward<T>( new_val ) );
 				new_element->Next = Top;
 				Top = new_element;
 			}
@@ -507,28 +534,18 @@ namespace LockFree
 			 * @param val добавляемое значение
 			 * @return true, если до добавления список был пуст
 			 */
-			bool Push( const T &val )
+			bool Push( T val )
 			{
-				return internal::PushHead( Top, new ElementType( val ) );
+				return internal::PushHead( Top, new ElementType( std::forward<T>( val ) ) );
 			}
 
 			/**
-			 * @brief Push добавляет новый элемент
-			 * @param val добавляемое значение
-			 * @return true, если до добавления список был пуст
-			 */
-			bool Push( T &&val )
-			{
-				return internal::PushHead( Top, new ElementType( std::move( val ) ) );
-			}
-
-			/**
-			 * @brief Push добавляет новый элемент
+			 * @brief Emplace добавляет новый элемент
 			 * @param args аргументы для создания нового значения списка
 			 * @return true, если до добавления список был пуст
 			 */
 			template <typename ...Types>
-			bool Push( Types ...args )
+			bool Emplace( Types ...args )
 			{
 				return internal::PushHead( Top, new ElementType( args... ) );
 			}
@@ -544,7 +561,63 @@ namespace LockFree
 				l.ReleaseTo( new_top );
 				return new_top == nullptr ? false : internal::PushHead( Top, new_top, false );
 			} // bool Push( UnsafeForwardList &l )
+			
+			/**
+			 * @brief TryPush добавляет новый элемент, если список пуст
+			 * @param val добавляемое значение
+			 * @return успешность операции
+			 */
+			bool TryPush( T val )
+			{
+				if( Top.load() != nullptr )
+				{
+					// Список не пуст
+					return false;
+				}
+				
+				std::unique_ptr<ElementType> ptr( new ElementType( std::forward<T>( val ) ) );
+				return internal::TryPushHead( Top, ptr );
+			}
 
+			/**
+			 * @brief TryEmplace добавляет новый элемент, если список пуст
+			 * @param args аргументы для создания нового значения списка
+			 * @return успешность операции
+			 */
+			template <typename ...Types>
+			bool TryEmplace( Types ...args )
+			{
+				if( Top.load() != nullptr )
+				{
+					// Список не пуст
+					return false;
+				}
+				
+				std::unique_ptr<ElementType> ptr( new ElementType( args... ) );
+				return internal::TryPushHead( Top, ptr );
+			}
+			
+//			/**
+//			 * @brief TryPush добавляет новые элементы, если список пуст
+//			 * @param l добавляемый (потоконебезопасный) список
+//			 * @return успешность операции
+//			 */
+//			bool TryPush( Unsafe &&l )
+//			{
+//#error "непонятно, что делать с элементами l-а в случае неудачи: удалять или возвращать обратно"
+//				if( ( Top.load() != nullptr ) || !l )
+//				{
+//					// Список не пуст, либо добавляемый список пустой
+//					return false;
+//				}
+				
+//				ElementType *new_top = nullptr;
+//				l.ReleaseTo( new_top );
+//				std::unique_ptr<ElementType> ptr( new ElementType( new_top ) );
+//				MY_ASSERT( ptr );
+//				return internal::TryPushHead( Top, ptr, false );
+//			}
+			
 			/// Извлечение всех элементов в потоконебезопасный список
 			Unsafe Release()
 			{
@@ -850,7 +923,7 @@ namespace LockFree
 	uint16_t GetCleanPeriod()
 	{
 		size_t sz = sizeof( T );
-		return MaxSizeToDelete / ( sz == 0 ? 1 : sz );
+		return ( uint16_t ) ( MaxSizeToDelete / ( sz == 0 ? 1 : sz ) );
 	}
 
 	/// Класс стека (последний пришёл - первый вышел)
@@ -906,30 +979,55 @@ namespace LockFree
 			 * @param val значение нового элемента
 			 * @return true, если до добавления элемента стек был пуст
 			 */
-			bool Push( const T &val )
+			bool Push( T val )
 			{
-				return internal::PushHead( Head, new ElementType( val ) );
+				return internal::PushHead( Head, new ElementType( std::forward<T>( val ) ) );
 			}
 
 			/**
-			 * @brief Push добавление нового элемента в стек
-			 * @param val значение нового элемента
-			 * @return true, если до добавления элемента стек был пуст
-			 */
-			bool Push( T &&val )
-			{
-				return internal::PushHead( Head, new ElementType( std::move( val ) ) );
-			}
-
-			/**
-			 * @brief Push добавление нового элемента в стек
+			 * @brief Emplace добавление нового элемента в стек
 			 * @param args аргументы для создания нового элемента
 			 * @return true, если до добавления элемента стек был пуст
 			 */
 			template <typename ...Types>
-			bool Push( Types ...args )
+			bool Emplace( Types ...args )
 			{
 				return internal::PushHead( Head, new ElementType( args... ) );
+			}
+			
+			/**
+			 * @brief TryPush добавляет новый элемент, если список пуст
+			 * @param val добавляемое значение
+			 * @return успешность операции
+			 */
+			bool TryPush( T val )
+			{
+				if( Head.load() != nullptr )
+				{
+					// Список не пуст
+					return false;
+				}
+				
+				std::unique_ptr<ElementType> ptr( new ElementType( std::forward<T>( val ) ) );
+				return internal::TryPushHead( Head, ptr );
+			}
+
+			/**
+			 * @brief TryEmplace добавляет новый элемент, если список пуст
+			 * @param args аргументы для создания нового значения списка
+			 * @return успешность операции
+			 */
+			template <typename ...Types>
+			bool TryEmplace( Types ...args )
+			{
+				if( Head.load() != nullptr )
+				{
+					// Список не пуст
+					return false;
+				}
+				
+				std::unique_ptr<ElementType> ptr( new ElementType( args... ) );
+				return internal::TryPushHead( Head, ptr );
 			}
 
 			/**
@@ -1255,7 +1353,7 @@ namespace LockFree
 			 * @brief Push добавление нового элемента в хвост очереди
 			 * @param val новое значение
 			 */
-			void Push( T &&val )
+			void Emplace( T &&val )
 			{
 				std::unique_ptr<T> val_smart_ptr( new T( std::move( val ) ) );
 				PushElement( val_smart_ptr );
@@ -1266,7 +1364,7 @@ namespace LockFree
 			 * @param args аргументы для создания нового элемента
 			 */
 			template <typename ...Types>
-			void Push( Types ...args )
+			void Emplace( Types ...args )
 			{
 				std::unique_ptr<T> val_smart_ptr( new T( args... ) );
 				PushElement( val_smart_ptr );

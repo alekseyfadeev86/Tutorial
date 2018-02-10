@@ -249,8 +249,8 @@ namespace Bicycle
 				throw std::invalid_argument( "Incorrect task" );
 			}
 			
-			const uint64_t timeout = task_type == IoTaskTypeEnum::Write ? WriteTimeoutMicrosec : ReadTimeoutMicrosec;
-			if( timeout == 0 )
+			const uint64_t timeout_microsec = task_type == IoTaskTypeEnum::Write ? WriteTimeoutMicrosec : ReadTimeoutMicrosec;
+			if( timeout_microsec == 0 )
 			{
 				// Неблокирующая операция
 				SharedLockGuard<SharedSpinLock> lock( Lock );
@@ -279,7 +279,7 @@ namespace Bicycle
 				
 				// Операция завершена (успешно или нет)
 				return GetSystemErrorByCode( err_code );
-			} // if( timeout == 0 )
+			} // if( timeout_microsec == 0 )
 
 			// Data - константа, поэтому синхронизировать доступ к ней не надо
 			// (хранимый указатель 100% не поменяется, будет помещён в очередь
@@ -308,8 +308,8 @@ namespace Bicycle
 			std::shared_ptr<CoroKeeper> coro_keeper_ptr;
 			TimeTasksQueue::task_type timer_task_ptr;
 			
-			MY_ASSERT( ( list_ptrs.first  != nullptr ) == ( timeout == TimeoutInfinite ) );
-			MY_ASSERT( ( list_ptrs.second != nullptr ) == ( timeout != TimeoutInfinite ) );
+			MY_ASSERT( ( list_ptrs.first  != nullptr ) == ( timeout_microsec == TimeoutInfinite ) );
+			MY_ASSERT( ( list_ptrs.second != nullptr ) == ( timeout_microsec != TimeoutInfinite ) );
 			MY_ASSERT( ( list_ptrs.second != nullptr ) == ( bool ) TimerQueuePtr );
 			
 			// Получаем функтор добавления ссылки на сопрограмму в очередь сервиса
@@ -318,12 +318,12 @@ namespace Bicycle
 			MY_ASSERT( poster );
 			
 			// Получаем указатель на таймер
-			MY_ASSERT( timeout != 0 );
+			MY_ASSERT( timeout_microsec != 0 );
 
 			// Необходимо храить указатель на таймер именно здесь, а не в coro_task-е,
 			// чтобы он 100% был жив, пока задача не завершится, либо не будет отменена
-			const auto timer_ptr = ( timeout != TimeoutInfinite ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
-			MY_ASSERT( ( timeout != TimeoutInfinite ) == ( bool ) timer_ptr );
+			const auto timer_ptr = ( timeout_microsec != TimeoutInfinite ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
+			MY_ASSERT( ( timeout_microsec != TimeoutInfinite ) == ( bool ) timer_ptr );
 			
 			if( list_ptrs.second != nullptr )
 			{
@@ -399,6 +399,9 @@ namespace Bicycle
 					break;
 				}
 				
+				err.Reset();
+				MY_ASSERT( !err );
+				
 				// Проверяем, не была ли задача отменена
 				if( coro_keeper_ptr )
 				{
@@ -429,7 +432,7 @@ namespace Bicycle
 				// ожидаем готовности с помощью epoll-а
 				std::function<void()> epoll_task = [ &err, &waiter, coro_keeper_ptr, list_ptrs, data_ptr,
 				                                     poster, &lock, &fd_ref, timer_ptr, timer_task_ptr,
-				                                     timeout, &flag_ref, use_timer ]
+				                                     timeout_microsec, &flag_ref, use_timer ]
 				{
 					// Этот код выполняется из основной сопрограммы потока
 					MY_ASSERT( lock );
@@ -442,9 +445,9 @@ namespace Bicycle
 						MY_ASSERT( timer_ptr );
 						MY_ASSERT( list_ptrs.second != nullptr );
 						MY_ASSERT( coro_keeper_ptr );
-						MY_ASSERT( timeout != 0 );
-						MY_ASSERT( timeout != TimeoutInfinite );
-						timer_ptr->Post( timer_task_ptr, timeout );
+						MY_ASSERT( timeout_microsec != 0 );
+						MY_ASSERT( timeout_microsec != TimeoutInfinite );
+						timer_ptr->ExecuteAfter( timer_task_ptr, std::chrono::microseconds( timeout_microsec ) );
 					}
 
 					AbstractEpollWorker::coro_list_t waiters;
@@ -455,7 +458,7 @@ namespace Bicycle
 						MY_ASSERT( local_lock );
 						MY_ASSERT( local_lock.Locked() );
 	
-						err = Error();
+						err.Reset();
 	
 						// Добавляем элемент в очередь сопрограмм, ожидающих готовности дескриптора
 						MY_ASSERT( !waiter.WasCancelled );
@@ -633,7 +636,7 @@ namespace Bicycle
 				return;
 			}
 
-			err = Error();
+			err.Reset();
 
 			MY_ASSERT( Data );
 			LockGuard<SharedSpinLock> lock( Lock );
@@ -669,7 +672,7 @@ namespace Bicycle
 
 		void BasicDescriptor::Close( Error &err )
 		{
-			err = Error();
+			err.Reset();
 			LockFree::ForwardList<Coroutine*>::Unsafe coros;
 			int old_fd = -1;
 
@@ -704,7 +707,7 @@ namespace Bicycle
 
 		void BasicDescriptor::Cancel( Error &err )
 		{
-			err = Error();
+			err.Reset();
 
 			MY_ASSERT( Data );
 			LockFree::ForwardList<Coroutine*>::Unsafe coros( Data->Cancel() );

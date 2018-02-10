@@ -168,11 +168,8 @@ namespace StackTest
 	void TestLists( const std::vector<T> &test_vec,
 	                const std::function<bool( T )> &validator )
 	{
-//		std::cout << "-------0------\n";
 		CommonStackTest<typename LockFree::ForwardList<T>::Unsafe>( test_vec );
-//		std::cout << "-------1------\n";
 		TestListUnsafe<T>( test_vec, validator );
-//		std::cout << "-------2------\n";
 
 		LockFree::ForwardList<T> fl;
 		for( T val : test_vec )
@@ -184,9 +181,7 @@ namespace StackTest
 		auto flu2 = fl.Release();
 		MY_CHECK_ASSERT( flu1 );
 		TestStackEmpty( flu2 );
-//		std::cout << "-------3------\n";
 		TestStackRemove( flu1, test_vec );
-//		std::cout << "-------4------\n";
 		for( T val : test_vec )
 		{
 			fl.Push( val );
@@ -194,12 +189,12 @@ namespace StackTest
 		flu1 = fl.Release();
 		fl.Push( std::move( flu1 ) );
 		TestStackEmpty( flu1 );
-//		std::cout << "-------5------\n";
 		flu1 = fl.Release();
 		TestStackRemove( flu1, test_vec );
-//		std::cout << "-------6------\n";
 	}
 } // namespace StackTest
+
+
 
 void forward_list_test()
 {
@@ -244,7 +239,7 @@ void forward_list_test()
 
 		for( uint16_t t = 0; t < count; ++t )
 		{
-			fl.Push( ( int64_t ) ( th_num * t + diff ) );
+			fl.Emplace( ( int64_t ) ( th_num * t + diff ) );
 		}
 
 		++finished_count;
@@ -314,6 +309,60 @@ void forward_list_test()
 
 	MY_CHECK_ASSERT( chk.empty() );
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+	
+	LockFree::DebugStruct s_1( 123 );
+	LockFree::DebugStruct s_2( 456 );
+	LockFree::DebugStruct s_3( 789 );
+	
+	auto flu = fl.Release();
+	MY_CHECK_ASSERT( !flu );
+	
+	MY_CHECK_ASSERT( fl.TryPush( s_1 ) );
+	MY_CHECK_ASSERT( !fl.TryPush( s_2 ) );
+	MY_CHECK_ASSERT( !fl.TryEmplace( s_3.Val ) );
+	
+	flu = fl.Release();
+	MY_CHECK_ASSERT( flu );
+	MY_CHECK_ASSERT( flu.Pop().Val == s_1.Val );
+	MY_CHECK_ASSERT( !flu );
+	
+	MY_CHECK_ASSERT( fl.TryEmplace( s_2.Val ) );
+	MY_CHECK_ASSERT( !fl.TryPush( s_1 ) );
+	MY_CHECK_ASSERT( !fl.TryEmplace( s_3.Val ) );
+	
+	flu = fl.Release();
+	MY_CHECK_ASSERT( flu );
+	MY_CHECK_ASSERT( flu.Pop().Val == s_2.Val );
+	MY_CHECK_ASSERT( !flu );
+	
+	std::atomic<uint64_t> add_count( 0 );
+	std::atomic<uint8_t> n( 0 );
+	
+	const auto task = [ & ]()
+	{
+		bool f = ( n++ % 2 ) == 0;
+		for( uint8_t t = f ? 0 : 1; t < 10; ++t )
+		{
+			bool chk = ( t % 2 ) == 0 ? fl.TryPush( s_1 ) : fl.TryEmplace( s_2.Val );
+			if( chk )
+			{
+				++add_count;
+			}
+		}
+	};
+	
+	std::thread threads2[ 4 ];
+	for( auto &th : threads2 )
+	{
+		th = std::thread( task );
+	}
+	
+	for( auto &th : threads2 )
+	{
+		th.join();
+	}
+	MY_CHECK_ASSERT( add_count.load() == 1 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 4 );
 } // void forward_list_test()
 
 void deferred_deleter_test()
@@ -526,7 +575,7 @@ void stack_test()
 		Stack<LockFree::DebugStruct> stack( 1, 0 );
 		test_stack_empty( stack );
 
-		stack.Push( 1 );
+		stack.Emplace( 1 );
 		stack.Push( LockFree::DebugStruct( 2 ) );
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 
@@ -549,7 +598,7 @@ void stack_test()
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
 			Stack<LockFree::DebugStruct> stack2( 1, 0 );
-			stack2.Push( 1 );
+			stack2.Emplace( 1 );
 			stack2.Push( LockFree::DebugStruct( 2 ) );
 			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 		}
@@ -578,7 +627,7 @@ void stack_test()
 			{
 				if( ( t % 2 ) == 0 )
 				{
-					stack.Push( t );
+					stack.Emplace( t );
 				}
 				else
 				{
@@ -653,7 +702,7 @@ void stack_test()
 		while( !run.load() )
 		{}
 
-		if( stack.Push( 1 ) )
+		if( stack.Emplace( 1 ) )
 		{
 			++counter;
 		}
@@ -744,7 +793,7 @@ void stack_test()
 
 		for( uint8_t t = 0; t < 10; ++t )
 		{
-			if( stack.Push( t ) )
+			if( stack.Emplace( t ) )
 			{
 				++counter;
 			}
@@ -808,6 +857,52 @@ void stack_test()
 	// в очереди на отложенное удаление
 	stack.CleanDeferredQueue();
 	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
+	
+	LockFree::DebugStruct s_0( -999 );
+	LockFree::DebugStruct s_1( 123 );
+	LockFree::DebugStruct s_2( 456 );
+	LockFree::DebugStruct s_3( 789 );
+	MY_CHECK_ASSERT( stack.Pop( &s_0 ).Val == s_0.Val );
+	MY_CHECK_ASSERT( stack.TryPush( s_1 ) );
+	MY_CHECK_ASSERT( !stack.TryPush( s_2 ) );
+	MY_CHECK_ASSERT( !stack.TryEmplace( s_3.Val ) );
+	MY_CHECK_ASSERT( stack.Pop( &s_0 ).Val == s_1.Val );
+	
+	MY_CHECK_ASSERT( stack.Pop( &s_0 ).Val == s_0.Val );
+	MY_CHECK_ASSERT( stack.TryEmplace( s_2.Val ) );
+	MY_CHECK_ASSERT( !stack.TryPush( s_1 ) );
+	MY_CHECK_ASSERT( !stack.TryEmplace( s_3.Val ) );
+	MY_CHECK_ASSERT( stack.Pop( &s_0 ).Val == s_2.Val );
+	MY_CHECK_ASSERT( stack.Pop( &s_0 ).Val == s_0.Val );
+	
+	std::atomic<uint64_t> add_count( 0 );
+	std::atomic<uint8_t> n( 0 );
+	
+	const auto task = [ & ]()
+	{
+		bool f = ( n++ % 2 ) == 0;
+		for( uint8_t t = f ? 0 : 1; t < 10; ++t )
+		{
+			bool chk = ( t % 2 ) == 0 ? stack.TryPush( s_1 ) : stack.TryEmplace( s_2.Val );
+			if( chk )
+			{
+				++add_count;
+			}
+		}
+	};
+	
+	std::thread threads2[ 4 ];
+	for( auto &th : threads2 )
+	{
+		th = std::thread( task );
+	}
+	
+	for( auto &th : threads2 )
+	{
+		th.join();
+	}
+	MY_CHECK_ASSERT( add_count.load() == 1 );
+	MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 5 );
 } // void stack_test()
 
 void queue_test()
@@ -821,7 +916,7 @@ void queue_test()
 		auto elem_ptr = queue.Pop();
 		MY_CHECK_ASSERT( !elem_ptr );
 
-		queue.Push( 1 );
+		queue.Emplace( 1 );
 		queue.Push( LockFree::DebugStruct( 2 ) );
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 
@@ -839,7 +934,7 @@ void queue_test()
 		MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 0 );
 		{
 			Queue<LockFree::DebugStruct> queue2( 1, 0 );
-			queue2.Push( 1 );
+			queue2.Emplace( 1 );
 			queue2.Push( LockFree::DebugStruct( 2 ) );
 			MY_CHECK_ASSERT( LockFree::DebugStruct::GetCounter() == 2 );
 		}
@@ -865,7 +960,7 @@ void queue_test()
 		{
 			if( ( t % 2 ) == 0 )
 			{
-				queue.Push( t );
+				queue.Emplace( t );
 			}
 			else
 			{

@@ -93,7 +93,7 @@ namespace Bicycle
 				 * @param task выполняемая задача (например, WSAReadFrom)
 				 * @param io_size ссылка на буфер, куда будет записано количество
 				 * записанных или отправленных байт
-				 * @param timeout_msec таймаут в миллисекундах
+				 * @param timeout_msec таймаут в микросекундах
 				 * @return ошибка выполнения
 				 * @throw std::invalid_argument, если task пустой
 				 */
@@ -143,8 +143,8 @@ namespace Bicycle
 				 * @param read_timeout_microsec таймаут на чтение (в микросекундах)
 				 * @param write_timeout_microsec таймаут на запись (в микросекундах)
 				 */
-				BasicDescriptor( uint64_t read_timeout_microsec = TimeoutInfinite,
-				                 uint64_t write_timeout_microsec = TimeoutInfinite );
+				BasicDescriptor( uint64_t read_timeout_microsec,
+				                 uint64_t write_timeout_microsec );
 
 			public:
 				BasicDescriptor( const BasicDescriptor& ) = delete;

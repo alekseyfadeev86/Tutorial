@@ -399,7 +399,7 @@ void check_udp_sock( bool single_thread )
 			{
 				for( size_t j = 0; j < snd_buf.second; ++j )
 				{
-					arr1[ j ] = 10*t + j;
+					arr1[ j ] = ( uint8_t ) ( 10*t + j );
 				}
 
 				size_t res = writer.SendTo( snd_buf, reader_addr, err );
@@ -474,7 +474,7 @@ void check_tcp( bool single_thread )
 	using namespace ErrorCodes;
 
 	const uint8_t ConnectionsNum = 10;
-	static std::atomic<uint16_t> PortNumber( 30000 );
+	static std::atomic<uint16_t> PortNumber( 35000 );
 	std::atomic<int64_t> FinishedConns( 0 );
 	const uint16_t srv_port_num = ( PortNumber += ConnectionsNum );
 
@@ -634,6 +634,537 @@ void check_tcp( bool single_thread )
 
 	MY_CHECK_ASSERT( srv.Stop() );
 } // void check_tcp( bool single_thread )
+
+typedef std::chrono::steady_clock clock_type;
+
+inline clock_type::time_point get_now() { return clock_type::now(); }
+inline int64_t get_diff_microsec( const clock_type::time_point &t )
+{
+	return std::chrono::duration_cast<std::chrono::microseconds>( get_now() - t ).count();
+}
+
+void check_udp_tcp_with_timeout( bool single_thread )
+{
+	static std::atomic<uint16_t> StaticPnum( 40000 );
+	std::atomic<uint16_t> &Pnum = StaticPnum;
+
+	Service srv;
+	MY_CHECK_ASSERT( srv.Restart() );
+	
+	auto udp_checker = [ &Pnum ]( bool is_nonblock )
+	{
+		const uint64_t timeout_microsec = is_nonblock ? 0 : 1000*1000;
+		static const uint64_t max_diff_microsec = 100*1000;
+		
+		Ip4Addr addr;
+		Error err;
+		addr.SetIp( "127.0.0.1", err );
+		MY_CHECK_ASSERT( !err );
+		
+		addr.SetPortNum( Pnum.fetch_add( 15 ) );
+		
+		auto udp_sock_ptr = std::make_shared<UdpSocket>( timeout_microsec, timeout_microsec );
+		MY_CHECK_ASSERT( udp_sock_ptr );
+		udp_sock_ptr->Open( err );
+		MY_CHECK_ASSERT( !err );
+		udp_sock_ptr->Bind( addr, err );
+		MY_CHECK_ASSERT( !err );
+		
+		static const size_t buf_sz = 10;
+		uint8_t buf[ buf_sz ];
+		for( size_t t = 0; t < buf_sz; ++t )
+		{
+			buf[ t ] = ( uint8_t ) t;
+		}
+		
+		Ip4Addr addr2;
+		auto t0 = get_now();
+		size_t sz = udp_sock_ptr->RecvFrom( BufferType( buf, buf_sz ), addr2, err );
+		int64_t diff = get_diff_microsec( t0 );
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+		MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+		MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+		
+		t0 = get_now();
+		sz = udp_sock_ptr->SendTo( ConstBufferType( buf, buf_sz ), addr, err );
+		diff = get_diff_microsec( t0 );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( sz == buf_sz );
+		MY_CHECK_ASSERT( diff <= ( int64_t ) max_diff_microsec );
+		
+		uint8_t buf2[ 2*buf_sz ] = { 0 };
+		t0 = get_now();
+		sz = udp_sock_ptr->RecvFrom( BufferType( buf2, 2*buf_sz ), addr2, err );
+		diff = get_diff_microsec( t0 );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( sz == buf_sz );
+		for( size_t t = 0; t < buf_sz; ++t )
+		{
+			MY_CHECK_ASSERT( buf2[ t ] == buf[ t ] );
+		}
+		
+		MY_CHECK_ASSERT( addr.GetPortNum() == addr2.GetPortNum() );
+		MY_CHECK_ASSERT( addr.GetIp( err ) == addr2.GetIp( err ) );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( diff <= ( int64_t ) max_diff_microsec );
+	
+		if( is_nonblock )
+		{
+			udp_sock_ptr->Close( err );
+			MY_CHECK_ASSERT( !err );
+			udp_sock_ptr.reset();
+			return;
+		}
+		
+		const std::chrono::microseconds wait_t( timeout_microsec/2 );
+		err = Go( [ udp_sock_ptr, wait_t, addr ]()
+		{
+			MY_CHECK_ASSERT( udp_sock_ptr );
+			Error e;
+			std::this_thread::sleep_for( wait_t );
+			const uint8_t v = 123;
+			size_t sz = udp_sock_ptr->SendTo( ConstBufferType( &v, 1 ), addr, e );
+			MY_CHECK_ASSERT( !e );
+			MY_CHECK_ASSERT( sz == 1 );
+		} );
+		MY_CHECK_ASSERT( !err );
+		
+		uint8_t v = 0;
+		t0 = get_now();
+		sz = udp_sock_ptr->RecvFrom( BufferType( &v, 1 ), addr2, err );
+		diff = get_diff_microsec( t0 );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( sz == 1 );
+		MY_CHECK_ASSERT( v == 123 );
+		MY_CHECK_ASSERT( addr.GetPortNum() == addr2.GetPortNum() );
+		MY_CHECK_ASSERT( addr.GetIp( err ) == addr2.GetIp( err ) );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( diff >= 0.99*wait_t.count() );
+		MY_CHECK_ASSERT( diff <= ( wait_t.count() + ( int64_t ) max_diff_microsec ) );
+		
+		udp_sock_ptr->Close( err );
+		MY_CHECK_ASSERT( !err );
+		udp_sock_ptr.reset();
+	}; // auto udp_checker = []( bool is_nonblock )
+	
+	auto tcp_acp_checker = [ &Pnum ]( bool is_nonblock )
+	{
+		const uint64_t timeout_microsec = is_nonblock ? 0 : 1000*1000;
+		static const uint64_t max_diff_microsec = 100*1000;
+		
+		Ip4Addr acp_addr;
+		Error err;
+		acp_addr.SetIp( "127.0.0.1", err );
+		MY_CHECK_ASSERT( !err );
+		
+		acp_addr.SetPortNum( Pnum.fetch_add( 15 ) );
+		
+		TcpAcceptor acceptor( timeout_microsec );
+		acceptor.Open( err );
+		MY_CHECK_ASSERT( !err );
+		acceptor.Bind( acp_addr, err );
+		MY_CHECK_ASSERT( !err );
+		acceptor.Listen( 10, err );
+		MY_CHECK_ASSERT( !err );
+		
+		TcpConnection tcp_conn( 0, 0 );
+		
+		Ip4Addr addr2;
+		auto t0 = get_now();
+		acceptor.Accept( tcp_conn, addr2, err );
+		int64_t diff = get_diff_microsec( t0 );
+		
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+		MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+		MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+		MY_CHECK_ASSERT( !tcp_conn.IsOpen() );
+		
+		Ip4Addr addr3;
+		addr3.SetIp( "127.0.0.1", err );
+		MY_CHECK_ASSERT( !err );
+		addr3.SetPortNum( acp_addr.GetPortNum() + 1 );
+		TcpConnection tcp_conn2( 0, 0 );
+		tcp_conn2.Open( err );
+		MY_CHECK_ASSERT( !err );
+		tcp_conn2.Bind( addr3, err );
+		MY_CHECK_ASSERT( !err );
+		tcp_conn2.Connect( acp_addr, err );
+		MY_CHECK_ASSERT( !err );
+		
+		t0 = get_now();
+		acceptor.Accept( tcp_conn, addr2, err );
+		diff = get_diff_microsec( t0 );
+		
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( diff <= ( int64_t ) max_diff_microsec );
+		MY_CHECK_ASSERT( tcp_conn.IsOpen() );
+		
+		tcp_conn.Close( err );
+		MY_CHECK_ASSERT( !err );
+		tcp_conn2.Close( err );
+		MY_CHECK_ASSERT( !err );
+		
+		if( is_nonblock )
+		{
+			acceptor.Close( err );
+			MY_CHECK_ASSERT( !err );
+			return;
+		}
+		
+		const std::chrono::microseconds wait_t( timeout_microsec/2 );
+		err = Go( [ acp_addr, wait_t ]()
+		{
+			Error e;
+			Ip4Addr local_addr;
+			local_addr.SetIp( "127.0.0.1", e );
+			MY_CHECK_ASSERT( !e );
+
+			local_addr.SetPortNum( acp_addr.GetPortNum() + 2 );
+			
+			TcpConnection conn( 0, 0 );
+			conn.Open( e );
+			MY_CHECK_ASSERT( !e );
+			conn.Bind( local_addr, e );
+			MY_CHECK_ASSERT( !e );
+			
+			std::this_thread::sleep_for( wait_t );
+			conn.Connect( acp_addr, e );
+			MY_CHECK_ASSERT( !e );
+			conn.Close( e );
+		} );
+		MY_CHECK_ASSERT( !err );
+		
+		MY_CHECK_ASSERT( !tcp_conn.IsOpen() );
+		t0 = get_now();
+		acceptor.Accept( tcp_conn, addr2, err );
+		diff = get_diff_microsec( t0 );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( tcp_conn.IsOpen() );
+		MY_CHECK_ASSERT( diff >= 0.99*wait_t.count() );
+		MY_CHECK_ASSERT( diff <= ( wait_t.count() + ( int64_t ) max_diff_microsec ) );
+		
+		tcp_conn.Close( err );
+		acceptor.Close( err );
+		MY_CHECK_ASSERT( !err );
+	}; // auto tcp_acp_checker = []( bool is_nonblock )
+	
+	auto tcp_conn_checker = [ &Pnum ]( bool is_nonblock )
+	{
+		const uint64_t timeout_microsec = is_nonblock ? 0 : 1000*1000;
+		static const uint64_t max_diff_microsec = 100*1000;
+		
+		Error err;
+		Ip4Addr acp_addr;
+		acp_addr.SetIp( "127.0.0.1", err );
+		MY_CHECK_ASSERT( !err );
+		
+		acp_addr.SetPortNum( Pnum.fetch_add( 15 ) );
+
+		TcpAcceptor acceptor;
+		acceptor.Open( err );
+		MY_CHECK_ASSERT( !err );
+		acceptor.Bind( acp_addr, err );
+		MY_CHECK_ASSERT( !err );
+		acceptor.Listen( 1, err );
+		MY_CHECK_ASSERT( !err );
+		
+		Ip4Addr addr;
+		addr.SetIp( "127.0.0.1", err );
+		MY_CHECK_ASSERT( !err );
+		addr.SetPortNum( acp_addr.GetPortNum() + 1 );
+		
+		auto conn_ptr = std::make_shared<TcpConnection>( timeout_microsec, timeout_microsec );
+		TcpConnection &conn = *conn_ptr;
+//		TcpConnection conn( timeout_microsec, timeout_microsec );
+		conn.Open( err );
+		MY_CHECK_ASSERT( !err );
+		conn.Bind( addr, err );
+		MY_CHECK_ASSERT( !err );
+
+		addr.SetPortNum( addr.GetPortNum() + 1 );
+		conn.Connect( acp_addr, err );
+		MY_CHECK_ASSERT( !err );
+		
+		auto rcv_conn_ptr = std::make_shared<TcpConnection>( timeout_microsec, timeout_microsec );
+		MY_CHECK_ASSERT( rcv_conn_ptr );
+		TcpConnection &rcv_conn = *rcv_conn_ptr;
+//		TcpConnection rcv_conn( timeout_microsec, timeout_microsec );
+		acceptor.Accept( rcv_conn, addr, err );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( rcv_conn.IsOpen() );
+		
+		// !!! в стеке лучше не создавать такие буферы, чтобы не было переполнения стека сопрограммы !!!
+		std::vector<uint8_t> buf_vec( 100*1024*1024 );
+		const BufferType buf( buf_vec.data(), buf_vec.size() );
+		const ConstBufferType cbuf( buf.first, buf.second );
+		size_t total_send_sz = 0;
+
+		// Пробуем считать данные - должна быть ошибка (превышение таймаута)
+		{
+			const auto t0 = get_now();
+			const auto sz = rcv_conn.Recv( buf, err );
+			const auto diff = get_diff_microsec( t0 );
+			MY_CHECK_ASSERT( sz == 0 );
+			MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+			MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+			MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+		}
+		
+		// Отправляем данные, пока не забьём буфер
+		while( true )
+		{
+			const auto t0 = get_now();
+			const auto sz = conn.Send( cbuf, err );
+			const auto diff = get_diff_microsec( t0 );
+			
+#if !(defined(_WIN32) || defined(_WIN64))
+			MY_CHECK_ASSERT( ( sz > 0 ) == !err );
+#else
+			MY_CHECK_ASSERT( err || ( sz > 0 ) );
+#endif
+			MY_CHECK_ASSERT( sz <= cbuf.second );
+			
+			total_send_sz += sz;
+			if( err )
+			{
+				// Не смогли отправить данные - буфер на том конце забит
+				MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+				MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+				MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+				break;
+			}
+		}
+
+		// После того, как забили буфер, винда (но не линукс)
+		// принудительно закрывает соединение (по крайней мере, если отменить операцию ввода-вывода)
+#if !(defined(_WIN32) || defined(_WIN64))
+		// Считываем данные
+		size_t total_recv_sz = 0;
+		while( true )
+		{
+			const auto t0 = get_now();
+			const auto sz = rcv_conn.Recv( buf, err );
+			const auto diff = get_diff_microsec( t0 );
+			
+#if !(defined(_WIN32) || defined(_WIN64))
+			MY_CHECK_ASSERT( ( sz > 0 ) == !err );
+#else
+			MY_CHECK_ASSERT( err || ( sz > 0 ) );
+#endif
+			MY_CHECK_ASSERT( sz <= buf.second );
+			
+			total_recv_sz += sz;
+			if( err )
+			{
+				// Все данные прочитаны
+				MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+				MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+				MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+				break;
+			}
+		}
+		
+		MY_CHECK_ASSERT( total_recv_sz == total_send_sz );
+#endif
+
+		if( is_nonblock )
+		{
+			acceptor.Close( err );
+			MY_CHECK_ASSERT( !err );
+			conn.Close( err );
+			MY_CHECK_ASSERT( !err );
+			rcv_conn.Close( err );
+			MY_CHECK_ASSERT( !err );
+			return;
+		}
+		
+		const std::chrono::microseconds wait_t( timeout_microsec/2 );
+#if (defined(_WIN32) || defined(_WIN64))
+		// При заполнении буфера винда закрывает соединение
+		conn.Close( err );
+		MY_CHECK_ASSERT( !err );
+		rcv_conn.Close( err );
+		MY_CHECK_ASSERT( !err );
+
+		conn.Open( err );
+		MY_CHECK_ASSERT( !err );
+		conn.Bind( addr, err );
+		MY_CHECK_ASSERT( !err );
+		conn.Connect( acp_addr, err );
+		MY_CHECK_ASSERT( !err );
+
+		acceptor.Accept( rcv_conn, addr, err );
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( rcv_conn.IsOpen() );
+#else
+		// Отправляем данные, пока не забьём буфер
+		total_send_sz = 0;
+		while( true )
+		{
+			const auto t0 = get_now();
+			const auto sz = conn.Send( cbuf, err );
+			const auto diff = get_diff_microsec( t0 );
+			
+#if !(defined(_WIN32) || defined(_WIN64))
+			MY_CHECK_ASSERT( ( sz > 0 ) == !err );
+#else
+			MY_CHECK_ASSERT( err || ( sz > 0 ) );
+#endif
+			MY_CHECK_ASSERT( sz <= cbuf.second );
+			
+			total_send_sz += sz;
+			if( err )
+			{
+				// Не смогли отправить данные - буфер на том конце забит
+				MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+				MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+				MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+				break;
+			}
+			
+			// если быстро записывать данные, то может получиться, что после
+			// выхода из цикла соединение conn готово отправить ещё
+			std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
+		}
+		
+		auto sz = conn.Send( cbuf, err );
+		MY_CHECK_ASSERT( sz == 0 );
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+		
+		// Записываем данные, параллельно считываем
+		err = Go( [ rcv_conn_ptr, total_send_sz, wait_t ]() // Параллельное считывание данных с задержкой
+		{
+			MY_CHECK_ASSERT( rcv_conn_ptr );
+			TcpConnection &rcv_conn = *rcv_conn_ptr;
+			
+			// Ставим задержку
+			std::this_thread::sleep_for( wait_t );
+			
+			std::vector<uint8_t> buf_vec( total_send_sz );
+			BufferType buf( buf_vec.data(), buf_vec.size() );
+			MY_CHECK_ASSERT( buf.second == total_send_sz );
+			
+			// Считываем данные
+			Error e;
+			auto sz = rcv_conn.Recv( buf );
+			MY_CHECK_ASSERT( !e );
+			MY_CHECK_ASSERT( sz > 0 );
+			MY_CHECK_ASSERT( sz <= buf.second );
+		} );
+		MY_CHECK_ASSERT( !err );
+		
+		{
+			const auto t0 = get_now();
+			sz = conn.Send( cbuf, err );
+			const auto diff = get_diff_microsec( t0 );
+			MY_CHECK_ASSERT( !err );
+			MY_CHECK_ASSERT( sz > 0 );
+			MY_CHECK_ASSERT( conn.IsOpen() );
+			MY_CHECK_ASSERT( diff >= 0.99*wait_t.count() );
+			MY_CHECK_ASSERT( diff <= ( wait_t.count() + ( int64_t ) max_diff_microsec ) );
+		}
+		
+		// Считываем все записанные данные
+		err.Reset();
+		while( !err )
+		{
+			rcv_conn.Recv( buf, err );
+		}
+		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+#endif
+		err.Reset();
+
+		// К этому моменту непрочитанных данных в соединении быть не должно
+		{
+			const auto t0 = get_now();
+			const auto sz = rcv_conn.Recv( buf, err );
+			const auto diff = get_diff_microsec( t0 );
+			MY_CHECK_ASSERT( sz == 0 );
+			MY_CHECK_ASSERT( err.Code == ErrorCodes::TimeoutExpired );
+			MY_CHECK_ASSERT( diff >= ( int64_t ) ( 0.99*timeout_microsec ) );
+			MY_CHECK_ASSERT( diff <= ( int64_t ) ( timeout_microsec + max_diff_microsec ) );
+		}
+		
+		err.Reset();
+
+		// Записываем данные, параллельно считываем
+		err = Go( [ conn_ptr, wait_t ]() // Параллельная запись данных с задержкой
+		{
+			MY_CHECK_ASSERT( conn_ptr );
+			TcpConnection &conn = *conn_ptr;
+			
+			// Ставим задержку
+			std::this_thread::sleep_for( wait_t );
+			
+			std::vector<uint8_t> buf_vec( 10 );
+			const ConstBufferType cbuf( buf_vec.data(), buf_vec.size() );
+			
+			// Записываем данные
+			Error e;
+			conn.Send( cbuf, e );
+			MY_CHECK_ASSERT( !e );
+		} );
+		MY_CHECK_ASSERT( !err );
+		
+		{
+			const auto t0 = get_now();
+			const auto sz = rcv_conn.Recv( buf, err );
+			const auto diff = get_diff_microsec( t0 );
+			MY_CHECK_ASSERT( !err );
+			MY_CHECK_ASSERT( sz > 0 );
+			MY_CHECK_ASSERT( rcv_conn.IsOpen() );
+			MY_CHECK_ASSERT( diff >= 0.99*wait_t.count() );
+			MY_CHECK_ASSERT( diff <= ( wait_t.count() + ( int64_t ) max_diff_microsec ) );
+		}
+
+		acceptor.Close( err );
+		MY_CHECK_ASSERT( !err );
+		conn.Close( err );
+		MY_CHECK_ASSERT( !err );
+		rcv_conn.Close( err );
+		MY_CHECK_ASSERT( !err );
+	}; // auto tcp_conn_checker = []( bool is_nonblock )
+	
+	auto h = [ udp_checker, tcp_acp_checker, tcp_conn_checker ]()
+	{
+		udp_checker( true );
+		udp_checker( false );
+		tcp_acp_checker( true );
+		tcp_acp_checker( false );
+		tcp_conn_checker( true );
+		tcp_conn_checker( false );
+	};
+	Error err = srv.AddCoro( h, 100*1024 );
+	MY_CHECK_ASSERT( !err );
+	
+	std::function<void()> thread_task = [ &srv ]
+	{
+		try
+		{
+			srv.Run();
+		}
+		catch( ... )
+		{
+			MY_CHECK_ASSERT( false );
+		}
+	};
+
+	const uint8_t threads_num = single_thread ? 1 : 4;
+	std::vector<std::thread> threads( threads_num );
+	MY_CHECK_ASSERT( threads.size() == threads_num );
+	
+	for( auto &th : threads )
+	{
+		th = std::thread( thread_task );
+	}
+
+	for( auto &th : threads )
+	{
+		th.join();
+	}
+
+	MY_CHECK_ASSERT( srv.Stop() );
+} // void check_udp_tcp_with_timeout( bool single_thread )
 
 void check_sync( bool single_thread )
 {
@@ -854,10 +1385,10 @@ void check_timer( bool single_thread )
 		MY_CHECK_ASSERT( err );
 		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerExpired );
 
-		timer.ExpiresAfter( 100*1000, err );
+		timer.ExpiresAfter( std::chrono::milliseconds( 100 ), err );
 		MY_CHECK_ASSERT( !err );
 
-		timer.ExpiresAfter( 1000*1000, err );
+		timer.ExpiresAfter( std::chrono::milliseconds( 1000 ), err );
 		MY_CHECK_ASSERT( err );
 		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerNotExpired );
 
@@ -868,7 +1399,7 @@ void check_timer( bool single_thread )
 		MY_CHECK_ASSERT( err );
 		MY_CHECK_ASSERT( err.Code == ErrorCodes::TimerExpired );
 
-		timer.ExpiresAfter( 1000*1000, err );
+		timer.ExpiresAfter( std::chrono::milliseconds( 1000 ), err );
 		MY_CHECK_ASSERT( !err );
 
 		for( uint8_t t = 0; t < 10; ++t )
@@ -884,7 +1415,7 @@ void check_timer( bool single_thread )
 		timer.Wait( err );
 		MY_CHECK_ASSERT( !err );
 
-		timer.ExpiresAfter( 1000*1000*1000, err );
+		timer.ExpiresAfter( std::chrono::seconds( 1000 ), err );
 		MY_CHECK_ASSERT( !err );
 		std::shared_ptr<std::atomic<uint8_t>> count_ptr( new std::atomic<uint8_t>( 0 ) );
 		const uint8_t number = 10;
@@ -911,6 +1442,20 @@ void check_timer( bool single_thread )
 				}
 			});
 		}
+		
+		Timer timer2;
+		const auto tp0 = clock_type::now();
+		auto tp = tp0 + std::chrono::milliseconds( 1000 );
+		timer2.ExpiresAt( tp, err );
+		MY_CHECK_ASSERT( !err );
+		
+		timer2.Wait( err );
+		const auto tp1 = clock_type::now();
+		MY_CHECK_ASSERT( !err );
+		MY_CHECK_ASSERT( tp1 > tp0 );
+		const auto millisec_diff = std::chrono::duration_cast<std::chrono::milliseconds>( tp1 - tp0 ).count();
+		MY_CHECK_ASSERT( millisec_diff >= 950 );
+		MY_CHECK_ASSERT( millisec_diff <= 1050 );
 	} ); // Error err = srv.AddCoro
 	MY_CHECK_ASSERT( !err );
 
@@ -959,6 +1504,8 @@ void coro_service_tests()
 		check_udp_sock( true );
 		check_tcp( false );
 		check_tcp( true );
+		check_udp_tcp_with_timeout( false );
+		check_udp_tcp_with_timeout( true );
 		check_sync( true );
 		check_sync( false );
 		check_timer( true );

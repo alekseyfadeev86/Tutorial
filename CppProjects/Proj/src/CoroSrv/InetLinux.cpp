@@ -8,7 +8,7 @@ namespace Bicycle
 	{
 		string Ip4Addr::GetIp( Error &err ) const
 		{
-			err = Error();
+			err.Reset();
 
 			char res[ 21 ];
 			if( inet_ntop( AF_INET, ( void* ) &Addr.sin_addr, res, 21 ) == nullptr )
@@ -22,7 +22,7 @@ namespace Bicycle
 
 		void Ip4Addr::SetIp( const string &ip, Error &err )
 		{
-			err = Error();
+			err.Reset();
 
 			int res = inet_pton( AF_INET, ip.c_str(), ( void* ) &Addr.sin_addr );
 			if( res == 1 )
@@ -56,7 +56,10 @@ namespace Bicycle
 			BasicDescriptor::CloseDescriptor( fd, err );
 		}
 
-		BasicSocket::BasicSocket()
+		BasicSocket::BasicSocket( uint64_t read_timeout_microsec,
+		                          uint64_t write_timeout_microsec ):
+		    BasicDescriptor( read_timeout_microsec,
+		                     write_timeout_microsec )
 		{}
 
 		BasicSocket::~BasicSocket()
@@ -167,31 +170,37 @@ namespace Bicycle
 			{
 				MY_ASSERT( fd != -1 );
 				err_code_t err_code = ErrorCodes::Success;
-				if( was_called )
+				
+				if( !was_called )
 				{
-					// Функция connect была вызвана - проверяем состояние сокета
-					// (connect выполняется асинхронно, т.к. fd - неблокирующий,
-					// и может возникнуть ситуация, когда в процессе подключения
-					// возникает ошибка, и epoll_wait реагирует на неё, (пробуждается),
-					// как будто сокет готов к записи)
-					socklen_t sz = sizeof( err_code );
-					if( getsockopt( fd, SOL_SOCKET, SO_ERROR, ( void* ) &err_code, &sz ) == -1 )
+					// Вызываем connect для асинхронного подключения
+					if( connect( fd, ( const struct sockaddr* ) &( addr.Addr ),
+					             ( socklen_t ) sizeof( addr.Addr ) ) != 0 )
 					{
-						return GetLastSystemError();
+						err_code = errno == EINPROGRESS ? EAGAIN : errno;
+						errno = 0;
 					}
-					return err_code;
+	
+					// Если операция не была прервана сигналом, снова дёргать не надо
+					was_called = err_code != EINTR;
+					
+					if( err_code != EAGAIN )
+					{
+						// Операция завершена (успешно или нет - другой вопрос)
+						return err_code;
+					}
 				}
-
-				// Вызываем connect для асинхронного подключения
-				if( connect( fd, ( const struct sockaddr* ) &( addr.Addr ),
-				             ( socklen_t ) sizeof( addr.Addr ) ) != 0 )
+				
+				// Функция connect была вызвана - проверяем состояние сокета
+				// (connect выполняется асинхронно, т.к. fd - неблокирующий,
+				// и может возникнуть ситуация, когда в процессе подключения
+				// возникает ошибка, и epoll_wait реагирует на неё, (пробуждается),
+				// как будто сокет готов к записи)
+				socklen_t sz = sizeof( err_code );
+				if( getsockopt( fd, SOL_SOCKET, SO_ERROR, ( void* ) &err_code, &sz ) == -1 )
 				{
-					err_code = errno == EINPROGRESS ? EAGAIN : errno;
-					errno = 0;
+					err_code = GetLastSystemError();
 				}
-
-				// Если операция не была прервана сигналом, снова дёргать не надо
-				was_called = err_code != EINTR;
 				return err_code;
 			};
 			err = ExecuteIoTask( task, IoTaskTypeEnum::Write );

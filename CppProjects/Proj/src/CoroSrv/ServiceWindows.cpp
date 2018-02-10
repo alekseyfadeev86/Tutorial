@@ -105,6 +105,7 @@ namespace Bicycle
 						MY_ASSERT( error_code != ErrorCodes::Success );
 						param->ErrorCode = error_code != ErrorCodes::Success ? error_code : ErrorCodes::UnknownError;
 						param->IoSize = ( size_t ) bytes_count;
+						MY_ASSERT( param->Coro != ErrorCodes::Success );
 
 						// Переходим в сопрограмму
 						MY_ASSERT( param->Coro != nullptr );

@@ -4,12 +4,11 @@ int main( int argc, char *argv[] )
 {
 #ifdef _DEBUG
 	coro_service_tests();
-	printf( "Done\n%s\n", "Success" );
 	return 0;
 #else
-#error "СѓР±СЂР°С‚СЊ"
+#error "убрать"
 #endif
-	
+
 	printf( "%s\n", "Start..." );
 	fflush( stdout );
 

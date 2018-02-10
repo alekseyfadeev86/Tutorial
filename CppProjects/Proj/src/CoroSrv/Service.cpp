@@ -305,7 +305,6 @@ namespace Bicycle
 						main_coro_ptr->SwitchTo( &prev_coro_ptr );
 					}
 
-					//return ( Coroutine* ) MainCoro.Get();
 					return main_coro_ptr;
 				}, CoroStackSize );
 

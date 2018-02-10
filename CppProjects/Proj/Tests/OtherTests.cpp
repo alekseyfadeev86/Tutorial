@@ -47,6 +47,14 @@ void errors_test()
 	MY_CHECK_ASSERT( ( bool ) test == ( bool ) example );
 	MY_CHECK_ASSERT( ( test2.Code == fake.Code ) && ( test2.What == fake.What ) );
 	MY_CHECK_ASSERT( ( bool ) test2 == ( bool ) fake );
+	
+	Error err;
+	err.Code = 123;
+	err.What = "what";
+	err.Reset();
+	MY_CHECK_ASSERT( !err );
+	MY_CHECK_ASSERT( err.Code == ErrorCodes::Success );
+	MY_CHECK_ASSERT( err.What.empty() );
 }
 
 void spin_lock_test()
@@ -359,7 +367,7 @@ void timer_test()
 	{
 		task_type task0( new CancellableTask( [ task, t ](){ task( t ); } ) );
 		std::weak_ptr<CancellableTask> task_wptr( task0 );
-		timer_ptr->Post( task0, microsec_timeouts[ t ] );
+		timer_ptr->ExecuteAfter( task0, std::chrono::microseconds( microsec_timeouts[ t ] ) );
 		MY_CHECK_ASSERT( task0 );
 		task0.reset();
 		MY_CHECK_ASSERT( !task_wptr.expired() );
@@ -367,7 +375,7 @@ void timer_test()
 	
 	bool chk = false;
 	task_type task1( new CancellableTask( [ &chk ](){ chk = true; } ) );
-	timer_ptr->Post( task1, 1500*1000 );
+	timer_ptr->ExecuteAfter( task1, std::chrono::milliseconds( 1500 ) );
 	std::weak_ptr<CancellableTask> task_wptr( task1 );
 	MY_CHECK_ASSERT( task1->Cancel() );
 	task1.reset();
@@ -395,9 +403,38 @@ void timer_test()
 	task1.reset( new CancellableTask( [ &chk ](){ chk = true; } ) );
 	task_wptr = task1;
 	MY_CHECK_ASSERT( !task_wptr.expired() );
-	timer_ptr->Post( task1, 1500*1000 );
+	timer_ptr->ExecuteAfter( task1, std::chrono::milliseconds( 1500 ) );
+	task1.reset();
+	
+	auto tp1 = clock_type::now() + std::chrono::seconds( 1 );
+	chk = false;
+	task1.reset( new CancellableTask( [ &mut, &cv, &chk ]()
+	{
+		std::lock_guard<std::mutex> lock( mut );
+		chk = true;
+		cv.notify_all();
+	} ) );
+	
+	task_wptr = task1;
+	MY_CHECK_ASSERT( !task_wptr.expired() );
+	timer_ptr->ExecuteAt( task1, tp1 );
 	task1.reset();
 	MY_CHECK_ASSERT( !task_wptr.expired() );
+	
+	{
+		std::unique_lock<std::mutex> lock( mut );
+		if( !chk )
+		{
+			auto res = cv.wait_until( lock, tp1 + std::chrono::milliseconds( 500 ) );
+			MY_CHECK_ASSERT( res != std::cv_status::timeout );
+		}
+	}
+	
+	if( !task_wptr.expired() )
+	{
+		std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
+	}
+	MY_CHECK_ASSERT( task_wptr.expired() );
 	timer_wptr = timer_ptr;
 	timer_ptr.reset();
 	MY_CHECK_ASSERT( timer_wptr.expired() );

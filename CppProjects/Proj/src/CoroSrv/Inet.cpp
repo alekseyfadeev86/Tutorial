@@ -55,6 +55,14 @@ namespace Bicycle
 			ThrowIfNeed( err );
 		}
 
+		
+		
+		UdpSocket::UdpSocket( uint64_t read_timeout_microsec,
+		                      uint64_t write_timeout_microsec ):
+		    BasicSocket( read_timeout_microsec,
+		                 write_timeout_microsec )
+		{}
+		
 		size_t UdpSocket::SendTo( const ConstBufferType &data, const Ip4Addr &addr )
 		{
 			Error err;
@@ -72,8 +80,18 @@ namespace Bicycle
 		}
 
 		//-------------------------------------------------------------------------------
-
-		TcpSocket::TcpSocket() {}
+		
+		TcpSocket::TcpSocket( uint64_t read_timeout_microsec,
+		                      uint64_t write_timeout_microsec ):
+		    BasicSocket( read_timeout_microsec,
+		                 write_timeout_microsec )
+		{}
+		
+		TcpConnection::TcpConnection( uint64_t read_timeout_microsec,
+		                              uint64_t write_timeout_microsec ):
+		    TcpSocket( read_timeout_microsec,
+		               write_timeout_microsec )
+		{}
 
 		void TcpConnection::Connect( const Ip4Addr &addr )
 		{
@@ -97,6 +115,10 @@ namespace Bicycle
 			ThrowIfNeed( err );
 			return res;
 		}
+		
+		TcpAcceptor::TcpAcceptor( uint64_t timeout_microsec ):
+		    TcpSocket( timeout_microsec )
+		{}
 
 		void TcpAcceptor::Listen( uint16_t backlog )
 		{

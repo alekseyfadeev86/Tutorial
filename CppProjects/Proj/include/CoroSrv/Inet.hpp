@@ -15,7 +15,7 @@ namespace Bicycle
 	namespace CoroService
 	{
 		using std::string;
-#error "переписать с учётом таймаута, дописать проверки"
+
 		/// Структура адреса Ip4 для функций обмена данными по сети
 		struct Ip4Addr
 		{
@@ -90,7 +90,14 @@ namespace Bicycle
 				/// Вызывает C-шную функцию socket с нужными параметрами
 				virtual int CreateNewSocket() = 0;
 #endif
-				BasicSocket();
+				
+				/**
+				 * @brief BasicSocket конструктор базового сокета
+				 * @param read_timeout_microsec таймаут на чтение (в микросекундах)
+				 * @param write_timeout_microsec таймаут на запись (в микросекундах)
+				 */
+				BasicSocket( uint64_t read_timeout_microsec,
+				             uint64_t write_timeout_microsec = TimeoutInfinite );
 
 			public:
 				virtual ~BasicSocket();
@@ -126,6 +133,14 @@ namespace Bicycle
 #endif
 
 			public:
+				/**
+				 * @brief UdpSocket конструктор сокета UDP
+				 * @param read_timeout_microsec таймаут на чтение (в микросекундах)
+				 * @param write_timeout_microsec таймаут на запись (в микросекундах)
+				 */
+				UdpSocket( uint64_t read_timeout_microsec = TimeoutInfinite,
+				           uint64_t write_timeout_microsec = TimeoutInfinite );
+				
 				/**
 				 * @brief SendTo отправка данных
 				 * @param data данные для отправки
@@ -180,8 +195,14 @@ namespace Bicycle
 				/// Вызывает C-шную функцию socket для создания сокета UDP
 				virtual int CreateNewSocket() override final;
 #endif
-
-				TcpSocket();
+				/**
+				 * @brief TcpSocket конструктор сокета TCP
+				 * @param read_timeout_microsec таймаут на чтение (в микросекундах)
+				 * @param write_timeout_microsec таймаут на запись и подключение
+				 * (в микросекундах)
+				 */
+				TcpSocket( uint64_t read_timeout_microsec,
+				           uint64_t write_timeout_microsec = TimeoutInfinite );
 		};
 
 		/// Класс соединения TCP
@@ -191,6 +212,15 @@ namespace Bicycle
 				friend class TcpAcceptor;
 
 			public:
+				/**
+				 * @brief TcpConnection конструктор соединения TCP
+				 * @param read_timeout_microsec таймаут на чтение (в микросекундах)
+				 * @param write_timeout_microsec таймаут на запись и подключение
+				 * (в микросекундах)
+				 */
+				TcpConnection( uint64_t read_timeout_microsec = TimeoutInfinite,
+				               uint64_t write_timeout_microsec = TimeoutInfinite );
+				
 				/**
 				 * @brief Connect подключение к указанному адресу
 				 * @param addr адрес, к которому происходит подключение
@@ -244,6 +274,12 @@ namespace Bicycle
 		class TcpAcceptor: public TcpSocket
 		{
 			public:
+				/**
+				 * @brief TcpAcceptor конструктор приёмника соединений TCP
+				 * @param timeout_microsec таймаут (в микросекундах)
+				 */
+				TcpAcceptor( uint64_t timeout_microsec = TimeoutInfinite );
+				
 				/**
 				 * @brief Listen начало прослушивания входящих соединений
 				 * @param максимальный размер очереди входящих соединений

@@ -123,7 +123,7 @@ namespace Bicycle
 	void TimeTasksQueue::ThreadFunc()
 	{
 		// Задачи, отсортированные по времени сработки
-		std::multimap<time_type, task_type> tasks_map;
+		std::multimap<time_point_type, task_type> tasks_map;
 
 		while( RunFlag.load() )
 		{
@@ -182,7 +182,7 @@ namespace Bicycle
 				// Сработка таймера
 				// Определяем текущее время и диапазон обрабатываемых элементов
 				// (время у которых не позже текущего)
-				const auto tp = ClockType::now();
+				const auto tp = clock_type::now();
 				const auto begin = tasks_map.begin();
 				const auto end = tasks_map.upper_bound( tp );
 
@@ -203,6 +203,24 @@ namespace Bicycle
 	TimeTasksQueue::TimeTasksQueue(): RunFlag( true )
 	{
 		WorkThread = std::thread( [ this ]() { ThreadFunc(); } );
+	}
+	
+	void TimeTasksQueue::PostAt( const task_type &task,
+	                             const time_point_type &tp )
+	{
+		if( !task || !( *task ) )
+		{
+			// Задана "пустышка" вместо задачи
+			return;
+		}
+
+		if( Tasks.Emplace( tp, task ) )
+		{
+			// Дёргаем condition_variable только, если добавили первый элемент
+			// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
+			std::lock_guard<std::mutex> lock( Mut );
+			Cv.notify_one();
+		}
 	}
 	
 	std::shared_ptr<TimeTasksQueue> TimeTasksQueue::GetQueue()
@@ -231,22 +249,4 @@ namespace Bicycle
 		}
 		WorkThread.join();
 	}
-
-	void TimeTasksQueue::Post( const task_type &task,
-	                           uint64_t timeout_microsec )
-	{
-		if( !task || !( *task ) )
-		{
-			return;
-		}
-
-		auto time_point = ClockType::now() + std::chrono::microseconds( timeout_microsec );
-		if( Tasks.Push( time_point, task ) )
-		{
-			// Дёргаем condition_variable только, если добавили первый элемент
-			// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
-			std::lock_guard<std::mutex> lock( Mut );
-			Cv.notify_one();
-		}
-	} // void Timer::TimerThread::Post
 } // namespace Bicycle

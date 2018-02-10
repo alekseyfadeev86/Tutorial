@@ -67,6 +67,9 @@ namespace Bicycle
 		 * @brief operator bool возвращает true, если Code != Success
 		 */
 		operator bool() const;
+		
+		/// Обнуление ошибки
+		void Reset();
 	};
 
 	/// Структура исключения

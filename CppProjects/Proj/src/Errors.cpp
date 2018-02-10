@@ -13,7 +13,7 @@ namespace Bicycle
 		char res[ 501 ] = { 0 };
 		if( FormatMessageA( FORMAT_MESSAGE_FROM_SYSTEM,
 		    0, err_code, MAKELANGID( LANG_ENGLISH, SUBLANG_ENGLISH_US ),
-		    ( LPTSTR ) &res, sizeof( res ), 0 ) != 0 )
+		    ( LPSTR ) &res, sizeof( res ), 0 ) != 0 )
 		{
 			return res;
 		}
@@ -60,6 +60,12 @@ namespace Bicycle
 	Error::operator bool() const
 	{
 		return Code != ErrorCodes::Success;
+	}
+	
+	void Error::Reset()
+	{
+		Code = ErrorCodes::Success;
+		What.clear();
 	}
 
 	//----------------------------------------------------------------------

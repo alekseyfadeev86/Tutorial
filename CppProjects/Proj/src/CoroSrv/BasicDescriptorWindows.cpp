@@ -39,15 +39,20 @@ namespace Bicycle
 
 			// Необходимо хранить указатель на таймер именно здесь, а не в coro_task-е,
 			// чтобы он 100% был жив, пока задача не завершится, либо не будет отменена
-			const auto timer_ptr = ( timeout_msec != Infinite ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
+			auto timer_ptr = ( ( timeout_msec != TimeoutInfinite ) && ( timeout_msec != 0 ) ) ? ( TimerQueuePtr ? TimerQueuePtr : TimeTasksQueue::GetQueue() ) : std::shared_ptr<TimeTasksQueue>();
 			TimeTasksQueue::task_type timer_task_ptr;
 
-			if( timer_ptr )
+			if( timeout_msec != TimeoutInfinite )
 			{
 				// Формируем задачу для таймера
-				MY_ASSERT( timeout_msec != Infinite );
 				io_task_struct_ptr.reset( new IocpStruct );
 				const std::weak_ptr<IocpStruct> io_task_struct_wptr( io_task_struct_ptr );
+
+				HANDLE fd;
+				{
+					SharedLockGuard<SharedSpinLock> lock( FdLock );
+					fd = Fd;
+				}
 
 				auto timer_task = [ fd, io_task_struct_wptr ]()
 				{
@@ -55,7 +60,7 @@ namespace Bicycle
 					if( ptr )
 					{
 						// Отменяем задачу ввода-вывода
-						BOOL res = CancelIoEx( fd, ( LPOVERLAPPED ) ptr.get() );
+						BOOL res = CancelIoEx( fd, &ptr->Ov );
 						MY_ASSERT( ( res != FALSE ) || ( WSAGetLastError() == ERROR_NOT_FOUND ) || ( WSAGetLastError() == ERROR_INVALID_HANDLE ) );
 					}
 				};
@@ -63,9 +68,9 @@ namespace Bicycle
 				timer_task_ptr.reset( new CancellableTask( timer_task ) );
 			} // if( timer_ptr )
 
-			MY_ASSERT( ( bool ) io_task_struct_ptr == ( bool ) timer_ptr );
+			MY_ASSERT( !( timer_ptr && !io_task_struct_ptr ) );
 			MY_ASSERT( ( bool ) io_task_struct_ptr == ( bool ) timer_task_ptr );
-			MY_ASSERT( ( bool ) io_task_struct_ptr == ( timeout_msec != Infinite ) );
+			MY_ASSERT( ( bool ) io_task_struct_ptr == ( timeout_msec != TimeoutInfinite ) );
 
 			IocpStruct &task_struct = io_task_struct_ptr ? *io_task_struct_ptr : io_task_struct_stat;
 			memset( ( void* ) &task_struct.Ov, 0, sizeof( task_struct.Ov ) );
@@ -73,10 +78,11 @@ namespace Bicycle
 			task_struct.Coro = GetCurrentCoro();
 			task_struct.IoSize = 0;
 			
-			std::function<void()> coro_task = [ &task, &task_struct, this, timeout_msec, timer_task_ptr, timer_ptr ]()
+			std::function<void()> coro_task = [ &task, &task_struct, this, timeout_msec,
+			                                    timer_task_ptr, timer_ptr ]() mutable
 			{
-				MY_ASSERT( ( timeout_msec == Infinite ) != ( bool ) timer_task_ptr );
-				MY_ASSERT( ( bool ) timer_task_ptr == ( bool ) timer_ptr );
+				MY_ASSERT( ( timeout_msec == TimeoutInfinite ) != ( bool ) timer_task_ptr );
+				MY_ASSERT( !( timer_ptr && !timer_task_ptr ) );
 
 				err_code_t err;
 				{
@@ -104,22 +110,32 @@ namespace Bicycle
 					MY_ASSERT( res );
 					return;
 				}
-				else if( timer_ptr )
+				
+				// !!! Если попали сюда, то обращаться к полям BasicDescriptor-а,
+				// task-у и task_struct-у небезопасно, т.к. есть шанс, что другой
+				// поток выполняет ту сопрограмму и вышел из функции !!!
+				if( timer_ptr )
 				{
 					// Взводим таймер отмены операции
-					MY_ASSERT( timeout_msec != Infinite );
+					MY_ASSERT( timeout_msec != TimeoutInfinite );
 					MY_ASSERT( timer_task_ptr );
-					timer_ptr->Post( timer_task_ptr, timeout_msec );
+					timer_ptr->ExecuteAfter( timer_task_ptr, std::chrono::microseconds( timeout_msec ) );
+				}
+				else if( timer_task_ptr )
+				{
+					// Неблокирующая операция - выполняем немедленную отмену
+					MY_ASSERT( timeout_msec == 0 );
+					( *timer_task_ptr )();
 				}
 
 				// Задача ещё не выполнена, результат будет получен через IOCP
 			};
 			
 			// Переходим в основную сопрограмму, выполняем там задачу и затем, когда будет готов результат, возвращаемся обратно
-			SetPostTaskAndSwitchToMainCoro( &coro_task );
+			SetPostTaskAndSwitchToMainCoro( std::move( coro_task ) );
 
 			Error err( GetSystemErrorByCode( task_struct.ErrorCode ) );
-			if( task_struct.ErrorCode == ErrorCodes::NotOpen )
+			if( err.Code == ErrorCodes::NotOpen )
 			{
 				err.What = "Descriptor is not open";
 			}
@@ -129,11 +145,25 @@ namespace Bicycle
 			if( timer_task_ptr )
 			{
 				// Отменяем задачу таймера, если она ещё не была выполнена
-				MY_ASSERT( timer_ptr );
-				timer_task_ptr->Cancel();
+				MY_ASSERT( timer_ptr || ( timeout_msec == 0 ) );
+
+				if( timer_task_ptr->IsCancelled() )
+				{
+					if( err.Code == ERROR_OPERATION_ABORTED )
+					{
+						// Таймаут
+						err.Code = ErrorCodes::TimeoutExpired;
+						err.What = "Timeout expired";
+					}
+				}
+				else
+				{
+					timer_task_ptr->Cancel();
+				}
+
 				timer_task_ptr.reset();
 			}
-
+			
 			return err;
 		}
 
@@ -143,7 +173,7 @@ namespace Bicycle
 		    ReadTimeoutMicrosec( read_timeout_microsec ),
 		    WriteTimeoutMicrosec( write_timeout_microsec ),
 		    Fd( INVALID_HANDLE_VALUE ),
-		    TimerQueuePtr( InitTimeout( read_timeout_microsec, write_timeout_microsec ) )
+		    TimerQueuePtr( InitTimer( read_timeout_microsec, write_timeout_microsec ) )
 		{}
 
 		void BasicDescriptor::Open( Error &err )
@@ -156,7 +186,7 @@ namespace Bicycle
 				return;
 			}
 
-			err = Error();
+			err.Reset();
 
 			LockGuard<SharedSpinLock> lock( FdLock );
 			if( Fd != INVALID_HANDLE_VALUE )
@@ -187,7 +217,7 @@ namespace Bicycle
 
 		void BasicDescriptor::Close( Error &err )
 		{
-			err = Error();
+			err.Reset();
 
 			HANDLE old_fd;
 			{
@@ -204,7 +234,7 @@ namespace Bicycle
 
 		void BasicDescriptor::Cancel( Error &err )
 		{
-			err = Error();
+			err.Reset();
 
 			SharedLockGuard<SharedSpinLock> lock( FdLock );
 			if( Fd == INVALID_HANDLE_VALUE )
