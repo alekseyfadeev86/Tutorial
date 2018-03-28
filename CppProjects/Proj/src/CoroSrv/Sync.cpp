@@ -520,7 +520,7 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 			PostToSrv( *coro_ptr );
 		}
 
-		Semaphore::Semaphore(): Counter( 0 ), Waiters( 0, 0xFF ) {}
+		Semaphore::Semaphore( uint64_t init_val ): Counter( init_val ), Waiters( 0, 0xFF ) {}
 		
 		Semaphore::~Semaphore()
 		{

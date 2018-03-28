@@ -83,7 +83,11 @@ namespace Bicycle
 				void AwakeCoro( Coroutine *coro_ptr );
 
 			public:
-				Semaphore();
+				/**
+				 * @brief Semaphore конструктор семафора
+				 * @param init_val начальное значение
+				 */
+				Semaphore( uint64_t init_val = 0 );
 				~Semaphore();
 
 				/// Увеличение счётчика на 1
@@ -91,6 +95,8 @@ namespace Bicycle
 
 				/// Ожидание установления счётчика > 1 и его уменьшение на 1
 				void Pop();
+				
+#error "TODO: добавить Pop с ожиданием"
 		};
 
 		class Event: public ServiceWorker

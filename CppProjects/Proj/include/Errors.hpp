@@ -8,7 +8,7 @@
 #include <string>
 #include <stdexcept>
 
-#ifndef MY_ASERT
+#ifndef MY_ASSERT
 	#ifdef _DEBUG
 	#include <assert.h>
 	#define MY_ASSERT(E) assert( E )

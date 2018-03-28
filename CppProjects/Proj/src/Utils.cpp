@@ -249,4 +249,148 @@ namespace Bicycle
 		}
 		WorkThread.join();
 	}
+	
+	//---------------------------------------------------------------------------------------------
+	
+	namespace ThreadSync
+	{
+#if defined(_WIN32) || defined(_WIN64)
+		bool Semaphore::Wait( double delta_time_sec )
+		{
+			const DWORD timeout = ( delta_time_sec < 0.001 ) ? 0 : 1000*delta_time_sec;
+			switch( WaitForSingleObject( SemHandle, timeout ) )
+			{
+				case WAIT_OBJECT_0:
+					// Дождались
+					return true;
+					
+				case WAIT_ABANDONED: //Ожидание было отменени (вообще странно...)
+				case WAIT_TIMEOUT: // Не дождались (прошло слишком много времени)
+					break;
+					
+				case WAIT_FAILED:
+					// Ошибка
+					ThrowIfNeed();
+					MY_ASSERT( false );
+					break;
+					
+				default:
+					MY_ASSERT( false );
+					break;
+			}
+			
+			return false;
+		}
+		
+		Semaphore::Semaphore( LONG init_val )
+		{
+			SemHandle = CreateSemaphore( nullptr, init_val, MAX_SEM_COUNT, nullptr );
+			if( SemHandle == NULL )
+			{
+				// Ошибка
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
+		}
+#else
+		bool Semaphore::Wait( double delta_time_sec )
+		{
+			Error err;
+			do
+			{
+				int res = -1;
+				if( delta_time_sec < 0.000001 )
+				{
+					res = sem_trywait( &SemHandle );
+				}
+				else
+				{
+					// Определяем текущее время
+					const time_t tnow = time( nullptr );
+					if( tnow == ( time_t ) -1 )
+					{
+						// Ошибка
+						ThrowIfNeed();
+						MY_ASSERT( false );
+					}
+					
+					const time_t sec_count = ( time_t ) delta_time_sec;
+					struct timespec tp;
+					tp.tv_sec  = tnow + sec_count;
+					tp.tv_nsec = ( long ) 1000000000*( delta_time_sec - sec_count );
+					
+					// Ждём семафора до указанного времени
+					res = sem_timedwait( &SemHandle, &tp );
+				}
+				
+				if( res == 0 )
+				{
+					// Успех
+					return true;
+				}
+				
+				err = GetLastSystemError();
+				MY_ASSERT( err );
+			}
+			while( err.Code == EINTR ); // Если ожидание прервано сигналом - повторяем
+			
+			MY_ASSERT( ( err.Code == ETIMEDOUT ) || ( err.Code == EAGAIN ) );
+			
+			return false;
+		}
+		
+		Semaphore::Semaphore( unsigned int init_val )
+		{
+			if( sem_init( &SemHandle, 0, init_val ) != 0 )
+			{
+				// Ошибка
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
+		}
+#endif
+	
+		Semaphore::~Semaphore()
+		{
+#if defined(_WIN32) || defined(_WIN64)
+			CloseHandle( SemHandle );
+#else
+			sem_destroy( &SemHandle );
+#endif
+		}
+		
+		void Semaphore::Push()
+		{
+#if defined(_WIN32) || defined(_WIN64)
+			if( ReleaseSemaphore( &SemHandle, 1, nullptr ) == 0 )
+#else
+			if( sem_post( &SemHandle ) != 0 )
+#endif
+			{
+				// Ошибка
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
+		}
+		
+		void Semaphore::Pop()
+		{
+#if defined(_WIN32) || defined(_WIN64)
+			if( WaitForSingleObject( SemHandle, TIMEOUT_INFINITE ) != WAIT_OBJECT_0 )
+#else
+			int res = -1;
+			do
+			{
+				res = sem_wait( &SemHandle );
+			}
+			while( ( res != 0 ) && ( errno == EINTR ) );
+			if( res != 0 )
+#endif
+			{
+				// Ошибка
+				ThrowIfNeed();
+				MY_ASSERT( false );
+			}
+		}
+	} // namespace ThreadSync
 } // namespace Bicycle

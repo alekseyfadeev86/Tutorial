@@ -114,7 +114,7 @@ namespace Bicycle
 				inline void ExpiresAt( const std::chrono::time_point<_Clock, _Duration> &tp )
 				{
 					Error err;
-					ExpitresAt( tp, err );
+					ExpiresAt( tp, err );
 					ThrowIfNeed( err );
 				}
 

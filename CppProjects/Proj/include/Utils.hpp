@@ -8,6 +8,10 @@
 #include <condition_variable>
 #include <thread>
 #include "LockFree.hpp"
+#include "Errors.hpp"
+#if !(defined(_WIN32) || defined(_WIN64))
+#include <semaphore.h>
+#endif
 
 namespace Bicycle
 {
@@ -420,4 +424,75 @@ namespace Bicycle
 				PostAt( task, tp );
 			}
 	};
+	
+	namespace ThreadSync
+	{
+		/// Семафор
+		class Semaphore
+		{
+			private:
+#if defined(_WIN32) || defined(_WIN64)
+				HANDLE SemHandle;
+#else
+				sem_t SemHandle;
+#endif
+				/// Ждать семафора delta_time секунд
+				bool Wait( double delta_time_sec );
+				
+			public:
+				/**
+				 * @brief Semaphore конструктор семафора
+				 * @param init_val начальное значение
+				 * @throw Exception в случае ошибки
+				 */
+#if defined(_WIN32) || defined(_WIN64)
+				Semaphore( LONG init_val );
+#else
+				Semaphore( unsigned int init_val = 0 );
+#endif
+				~Semaphore();
+				
+				/**
+				 * @brief Push Увеличение счётчика на 1
+				 * @throw Exception в случае ошибки
+				 */
+				void Push();
+	
+				/**
+				 * @brief Pop Ожидание установления счётчика > 1
+				 * и его уменьшение на 1
+				 * @throw Exception в случае ошибки
+				 */
+				void Pop();
+				
+				/**
+				 * @brief TryPopFor попытка уменьшить значение
+				 * счётчика в течение timeout-а
+				 * @param timeout максимальное время ожидания
+				 * @return успешность операции
+				 * @throw Exception в случае ошибки
+				 */
+				template<typename _Rep, typename _Period>
+				inline bool TryPopFor( const std::chrono::duration<_Rep, _Period> &timeout )
+				{
+					using namespace std::chrono;
+					const auto microsec_timeout = duration_cast<microseconds>( timeout );
+					return Wait( ( ( double ) microsec_timeout ) / 1000000. );
+				}
+				
+				/**
+				 * @brief TryPopUntil попытка уменьшить значение
+				 * счётчика до заданного момента времени
+				 * @param tp момент времени, после которого
+				 * ожидание прекращается
+				 * @return успешность операции
+				 * @throw Exception в случае ошибки
+				 */
+				template<typename _Clock, typename _Duration>
+				inline bool TryPopUntil( const std::chrono::time_point<_Clock, _Duration> &tp )
+				{
+					TryPopFor( tp - _Clock::now() );
+				}
+		};
+	} // namespace ThreadSync
 } // namespace Bicycle
