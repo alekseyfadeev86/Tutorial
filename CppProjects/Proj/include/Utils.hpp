@@ -451,6 +451,9 @@ namespace Bicycle
 				Semaphore( unsigned int init_val = 0 );
 #endif
 				~Semaphore();
+#ifndef _DEBUG
+#error "написать проверки"
+#endif
 				
 				/**
 				 * @brief Push Увеличение счётчика на 1
@@ -491,7 +494,7 @@ namespace Bicycle
 				template<typename _Clock, typename _Duration>
 				inline bool TryPopUntil( const std::chrono::time_point<_Clock, _Duration> &tp )
 				{
-					TryPopFor( tp - _Clock::now() );
+					return TryPopFor( tp - _Clock::now() );
 				}
 		};
 	} // namespace ThreadSync

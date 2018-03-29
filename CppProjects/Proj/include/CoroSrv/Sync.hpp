@@ -90,6 +90,10 @@ namespace Bicycle
 				Semaphore( uint64_t init_val = 0 );
 				~Semaphore();
 
+#ifndef _DEBUG
+#error "переписать проверки"
+#endif
+				
 				/// Увеличение счётчика на 1
 				void Push();
 
