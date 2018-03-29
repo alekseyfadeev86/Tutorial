@@ -66,14 +66,11 @@ namespace Bicycle
 		class Semaphore: public ServiceWorker
 		{
 			private:
-				/// Счётчик
-				std::atomic<uint64_t> Counter;
+				/// Счётчики
+				std::atomic<uint64_t> Counters;
 
 				/// Очередь ожидающих сопрограмм
 				LockFree::DigitsQueue Waiters;
-
-				/// Попытка уменьшения счётчика на 1 (его значение не может быть < 0)
-				bool TryDecrement();
 
 				/**
 				 * @brief AwakeCoro "пробудить" сопрограмму: добавить в
@@ -87,7 +84,7 @@ namespace Bicycle
 				 * @brief Semaphore конструктор семафора
 				 * @param init_val начальное значение
 				 */
-				Semaphore( uint64_t init_val = 0 );
+				Semaphore( uint32_t init_val = 0 );
 				~Semaphore();
 
 #ifndef _DEBUG

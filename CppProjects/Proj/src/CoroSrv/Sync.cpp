@@ -499,83 +499,77 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 
 		//-----------------------------------------------------------------------------------------
 
-		bool Semaphore::TryDecrement()
-		{
-			uint64_t cur_value = Counter.load();
-			while( cur_value > 0 )
-			{
-				if( Counter.compare_exchange_weak( cur_value, cur_value - 1 ) )
-				{
-					// Счётчик был больше нуля - уменьшили на 1
-					return true;
-				}
-			}
-
-			return false;
-		} // bool Semaphore::TryDecrement()
-
 		void Semaphore::AwakeCoro( Coroutine *coro_ptr )
 		{
 			MY_ASSERT( coro_ptr != nullptr );
 			PostToSrv( *coro_ptr );
 		}
 
-		Semaphore::Semaphore( uint64_t init_val ): Counter( init_val ), Waiters( 0, 0xFF ) {}
+		Semaphore::Semaphore( uint32_t init_val ): Counters( init_val ), Waiters( 0, 0xFF ) {}
 		
 		Semaphore::~Semaphore()
 		{
-			MY_ASSERT( Counter.load() == 0 );
-			MY_ASSERT( !Waiters.Pop() );
+			MY_ASSERT( Counters.load() == 0 );
+			MY_ASSERT( Waiters.Pop() == nullptr );
 		}
 
 		void Semaphore::Push()
 		{
-			// Смотрим, есть ли в очереди ожидающие сопрограммы
-			Coroutine *coro_ptr = ( Coroutine* ) Waiters.Pop();
-			if( coro_ptr != nullptr )
-			{
-				// Есть: говорим основной сопрограмме переключиться
-				// на первую из них и на этом всё
-				AwakeCoro( coro_ptr );
-				return;
-			}
-
-			// Очередь пуста (была, по крайней мере): увеличиваем счётчик
-			// и смотрим, не появились ли сопрограммы в очереди
-			++Counter;
-#error "переделать"
+			uint64_t cur_counts = Counters.load();
+			uint64_t new_counts = 0;
+			uint64_t waiters_count   = 0;
+			uint64_t resources_count = 0;
 			
-			// Счётчик был увеличен - нужно убедиться,
-			// что не возникнет такая ситуация,
-			// когда одновременно и счётчик ненулевой,
-			// и очередь ждущих сопрограмм не пуста
-			do
+			bool work_waiter = false;
+			while( true )
 			{
-				// Смотрим, есть ли "ждуны"
-				coro_ptr = ( Coroutine* ) Waiters.Pop();
-				if( coro_ptr == nullptr )
+				waiters_count   = cur_counts >> 32;
+				resources_count = 0xFFFFFFFF & cur_counts;
+				MY_ASSERT( ( waiters_count == 0 ) || ( resources_count == 0 ) );
+				
+				if( waiters_count > 0 )
 				{
-					// Нет...
-					break;
+					--waiters_count;
+					work_waiter = true;
+				}
+				else
+				{
+					if( resources_count == 0xFFFFFFFF )
+					{
+#ifdef _DEBUG
+						MY_ASSERT( false );
+#else
+#error "выбросить исключение - слишком большое значение"
+#endif
+					}
+					
+					++resources_count;
+					work_waiter = false;
 				}
 				
-				// Появились новые "ждуны": пробуем уменьшить счётчик и
-				// сообщить основной сопрограмме о необходимости переключиться
-				// на одного из "ждунов"
-	
-				if( TryDecrement() )
+				new_counts = ( waiters_count << 32 ) | resources_count;
+				if( Counters.compare_exchange_weak( cur_counts, new_counts ) )
 				{
-					// Успешно уменьшили счётчик: передаём
-					// задание основной сопрограмме
-					AwakeCoro( coro_ptr );
-					break;
+					if( work_waiter )
+					{
+						auto coro_ptr = Waiters.Pop();
+						if( coro_ptr == nullptr )
+						{
+							MY_ASSERT( false );
+#ifndef _DEBUG
+#error "переделать с учётом таймаутов"
+#endif
+							continue;
+						}
+						
+						MY_ASSERT( coro_ptr != nullptr );
+						AwakeCoro( coro_ptr );
+					}
+					
+					return;
 				}
-				
-				// Не удалось уменьшить счётчик: кто-то другой его уже обнулил.
-				// Возвращаем "ждуна" обратно в очередь (в конец)
-				MY_ASSERT( coro_ptr != nullptr );
-				Waiters.Push( coro_ptr );
-			} while( Counter.load() > 0 );
+			} // while( true )
+			MY_ASSERT( false );
 		} // void Semaphore::Push()
 
 		void Semaphore::Pop()
@@ -586,31 +580,87 @@ MY_ASSERT( SharedLockUsersNum( StateFlag.load() ) > 0 );}
 				throw Exception( ErrorCodes::NotInsideSrvCoro,
 				                 "Must be called from service coroutine" );
 			}
-
-			if( TryDecrement() )
+			
+			uint64_t cur_counts = Counters.load();
+			uint64_t new_counts = 0;
+			uint64_t waiters_count   = cur_counts >> 32;
+			uint64_t resources_count = 0xFFFFFFFF & cur_counts;
+			MY_ASSERT( ( waiters_count == 0 ) || ( resources_count == 0 ) );
+			
+			if( resources_count > 0 )
 			{
-				// Успешно уменьшили счётчик на 1
-				return;
+				new_counts = ( waiters_count << 32 ) | ( resources_count - 1 );
+				if( Counters.compare_exchange_strong( cur_counts, new_counts ) )
+				{
+					// Успешно уменьшили счётчик ресурсов на 1
+					return;
+				}
 			}
-
+			
 			// Счётчик нулевой (по крайней мере, был) - ждём его увеличения
 			std::function<void()> task = [ this, cur_coro_ptr ]()
 			{
+				uint64_t cur_counts = Counters.load();
+				uint64_t new_counts = 0;
+				uint64_t waiters_count   = 0;
+				uint64_t resources_count = 0;
+				
 				// Добавляем указатель на текущую сопрограмму в очередь "ждунов"
 				Waiters.Push( cur_coro_ptr );
-#error "переделать"
-
-				// Пробуем уменьшить счётчик (вдруг уже был увеличен)
-				if( TryDecrement() )
+				
+				bool work_waiter = false;
+				while( true )
 				{
-					// Удалось: пробуем извлечь первый указатель из очереди
-					// (это не обязательно будет cur_coro_ptr) и переключаемся на эту сопрограмму
-					Coroutine *coro_ptr = ( Coroutine* ) Waiters.Pop();
-					MY_ASSERT( coro_ptr != nullptr );
-					bool res = coro_ptr->SwitchTo();
-					MY_ASSERT( res );
-					return;
-				} // if( TryDecrement() )
+					waiters_count   = cur_counts >> 32;
+					resources_count = 0xFFFFFFFF & cur_counts;
+					MY_ASSERT( ( waiters_count == 0 ) || ( resources_count == 0 ) );
+					
+					if( resources_count > 0 )
+					{
+						--resources_count;
+						work_waiter = true;
+					}
+					else
+					{
+						if( waiters_count == 0xFFFFFFFF )
+						{
+#ifdef _DEBUG
+							MY_ASSERT( false );
+#else
+#error "обработать"
+#endif
+						}
+						
+						++waiters_count;
+						work_waiter = false;
+					}
+					
+					new_counts = ( waiters_count << 32 ) | resources_count;
+					if( Counters.compare_exchange_weak( cur_counts, new_counts ) )
+					{
+						if( work_waiter )
+						{
+							auto coro_ptr = Waiters.Pop();
+							if( coro_ptr == nullptr )
+							{
+								MY_ASSERT( false );
+#ifndef _DEBUG
+#error "переделать с учётом таймаутов"
+#endif
+								continue;
+							}
+							
+							MY_ASSERT( coro_ptr != nullptr );
+							Coroutine *coro_ptr = ( Coroutine* ) Waiters.Pop();
+							MY_ASSERT( coro_ptr != nullptr );
+							bool res = coro_ptr->SwitchTo();
+							MY_ASSERT( res );
+						}
+						
+						return;
+					}
+				} // while( true )
+				MY_ASSERT( false );
 			};
 
 			// Переходим в основную сопрограмму и выполняем task
