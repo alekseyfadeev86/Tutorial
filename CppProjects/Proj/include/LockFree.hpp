@@ -5,6 +5,9 @@
 #include <stdexcept>
 #include <vector>
 #include <memory>
+#include <utility>
+
+#error "использовать std::move_if_noexcept"
 
 #ifndef MY_ASSERT
 #define MY_ASSERT( EXPR )
@@ -143,19 +146,31 @@ namespace LockFree
 #endif // #ifdef UNITTEST
 
 		template <typename T>
-		StructElementType<T>* GetBottom( StructElementType<T> *top )
+		StructElementType<T>* GetBottom( StructElementType<T> *top ) noexcept
 		{
+#ifdef _DEBUG
+			try
+			{
+#endif
 			if( top == nullptr )
 			{
 				return nullptr;
 			}
 
 			StructElementType<T> *res = nullptr;
-			for( ; top != nullptr; res = top, top = top->Next.load() )
+			for( ; top != nullptr;
+			     res = top, top = top->Next.load() )
 			{}
 
 			MY_ASSERT( res != nullptr );
 			return res;
+#ifdef _DEBUG
+			}
+			catch( ... )
+			{
+				MY_ASSERT( false );
+			}
+#endif
 		}
 
 		/**
@@ -177,6 +192,11 @@ namespace LockFree
 				MY_ASSERT( false );
 				throw std::invalid_argument( "New head cannot be nullptr" );
 			}
+			
+#ifdef _DEBUG
+			try
+			{
+#endif
 			StructElementType<T> *new_bottom = add_only_one ? new_head : GetBottom( new_head );
 			MY_ASSERT( new_bottom != nullptr );
 
@@ -189,6 +209,13 @@ namespace LockFree
 					return old_head == nullptr;
 				}
 			}
+#ifdef _DEBUG
+			}
+			catch( ... )
+			{
+				MY_ASSERT( false );
+			}
+#endif
 
 			MY_ASSERT( false );
 			return false;
@@ -215,6 +242,10 @@ namespace LockFree
 				throw std::invalid_argument( "New head cannot be nullptr" );
 			}
 			
+#ifdef _DEBUG
+			try
+			{
+#endif
 			StructElementType<T> *new_bottom = add_only_one ? new_head.get() : GetBottom( new_head.get() );
 			MY_ASSERT( new_bottom != nullptr );
 
@@ -229,6 +260,14 @@ namespace LockFree
 			
 			// Список был не пуст
 			new_bottom->Next.store( nullptr );
+#ifdef _DEBUG
+			}
+			catch( ... )
+			{
+				MY_ASSERT( false );
+			}
+#endif
+			
 			return false;
 		}
 	} // namespace internal
@@ -248,8 +287,12 @@ namespace LockFree
 			ElementType *Top;
 
 			/// Очистка списка
-			void Clean()
+			void Clean() noexcept
 			{
+#ifdef _DEBUG
+				try
+				{
+#endif
 				ElementType *top = Top;
 				Top = nullptr;
 				ElementType *ptr = nullptr;
@@ -260,6 +303,14 @@ namespace LockFree
 					top = top->Next.load();
 					delete ptr;
 				}
+#ifdef _DEBUG
+				}
+				catch( ... )
+				{
+					MY_ASSERT( false );
+					throw;
+				}
+#endif
 			}
 
 			/**
@@ -275,11 +326,18 @@ namespace LockFree
 			{
 				if( Top != nullptr )
 				{
-					ElementType *old_top = Top;
-					Top = Top->Next;
-					T result( std::move( old_top->Value ) );
-					delete old_top;
-					return result;
+					std::unique_ptr<ElementType> old_top( Top );
+					try
+					{
+						Top = Top->Next;
+						return std::move_if_noexcept( old_top->Value );
+					}
+					catch( ... )
+					{
+						MY_ASSERT( old_top->Next.load() == Top );
+						Top = old_top.release();
+						throw;
+					}
 				}
 
 				if( def_value == nullptr )
@@ -295,27 +353,39 @@ namespace LockFree
 			UnsafeForwardList& operator=( const UnsafeForwardList& ) = delete;
 
 			UnsafeForwardList( UnsafeForwardList &&l ): Top( l.Top ) { l.Top = nullptr; }
-			UnsafeForwardList& operator=( UnsafeForwardList &&l )
+			UnsafeForwardList& operator=( UnsafeForwardList &&l ) noexcept
 			{
+#ifdef _DEBUG
+				try
+				{
+#endif
 				if( &l != this )
 				{
 					Clean();
 					Top = l.Top;
 					l.Top = nullptr;
 				}
+#ifdef _DEBUG
+				}
+				catch( ... )
+				{
+					MY_ASSERT( false );
+					throw;
+				}
+#endif
 
 				return *this;
 			}
 
-			UnsafeForwardList(): Top( nullptr ){}
-			UnsafeForwardList( std::atomic<ElementType*> &&ptr ): Top( ptr.exchange( nullptr ) ){}
+			UnsafeForwardList() noexcept: Top( nullptr ){}
+			UnsafeForwardList( std::atomic<ElementType*> &&ptr ) noexcept: Top( ptr.exchange( nullptr ) ){}
 
 			~UnsafeForwardList()
 			{
 				Clean();
 			}
 
-			operator bool() const
+			operator bool() const noexcept
 			{
 				return Top != nullptr;
 			}
@@ -332,11 +402,11 @@ namespace LockFree
 			}
 
 			/**
-			 * @brief Push Добавление элемента в начало списка
+			 * @brief Emplace Добавление элемента в начало списка
 			 * @param args аргументы для создания нового значения
 			 */
 			template <typename ...Types>
-			void Push( Types ...args )
+			void Emplace( Types ...args )
 			{
 				ElementType *new_element = new ElementType( args... );
 				new_element->Next = Top;
@@ -347,37 +417,35 @@ namespace LockFree
 			 * @brief Push Добавление элементов в начало списка
 			 * @param u добавляемые элементы (u будет очищен)
 			 */
-			void Push( UnsafeForwardList &&u )
+			void Push( UnsafeForwardList &&u ) noexcept
 			{
+#ifdef _DEBUG
+				try
+				{
+#endif
 				if( !u )
 				{
 					// Нечего добавлять
 					return;
 				}
-
-				ElementType *old_top = Top;
+				
+				MY_ASSERT( u.Top != nullptr );
+				if( Top != nullptr )
+				{
+					// Связываем последний элемент добавляемого списка
+					// с первым элементом прежнего
+					internal::GetBottom( u.Top )->Next.store( Top );
+				}
 				Top = u.Top;
 				u.Top = nullptr;
-
-				if( old_top != nullptr )
+#ifdef _DEBUG
+				}
+				catch( ... )
 				{
-					// Проходим добавляемый список до конца
-					ElementType *bottom = Top;
-					ElementType *next = nullptr;
-					while( true )
-					{
-						next = bottom->Next.load();
-						if( next == nullptr )
-						{
-							// Нашли последний элемент добавляемого списка,
-							// связываем его с первым элементом прежнего
-							bottom->Next.store( old_top );
-							break;
-						}
-
-						bottom = next;
-					}
-				} // if( old_top != nullptr )
+					MY_ASSERT( false );
+					throw;
+				}
+#endif
 			} // void Push( UnsafeForwardList &&u )
 
 			/**
@@ -447,7 +515,7 @@ namespace LockFree
 			 * @brief Reverse меняет порядок элементов
 			 * @return количество элементов
 			 */
-			size_t Reverse()
+			size_t Reverse() noexcept
 			{
 				if( Top == nullptr )
 				{
@@ -481,7 +549,7 @@ namespace LockFree
 			 * на начальный элемент списка
 			 * @return успешность
 			 */
-			bool ReleaseTo( internal::StructElementType<T>* &storage )
+			bool ReleaseTo( internal::StructElementType<T>* &storage ) noexcept
 			{
 				if( storage != nullptr )
 				{
@@ -516,7 +584,7 @@ namespace LockFree
 			ForwardList& operator=( const ForwardList& ) = delete;
 			ForwardList& operator=( ForwardList&& ) = delete;
 
-			ForwardList(): Top( nullptr ) {}
+			ForwardList() noexcept: Top( nullptr ) {}
 			~ForwardList()
 			{
 				ElementType *top = Top.exchange( nullptr );
@@ -555,11 +623,23 @@ namespace LockFree
 			 * @param l добавляемый (потоконебезопасный) список
 			 * @return true, если до добавления список был пуст
 			 */
-			bool Push( Unsafe &&l )
+			bool Push( Unsafe &&l ) noexcept
 			{
+#ifdef _DEBUG
+				try
+				{
+#endif
 				ElementType *new_top = nullptr;
 				l.ReleaseTo( new_top );
 				return new_top == nullptr ? false : internal::PushHead( Top, new_top, false );
+#ifdef _DEBUG
+				}
+				catch( ... )
+				{
+					MY_ASSERT( false );
+					throw;
+				}
+#endif
 			} // bool Push( UnsafeForwardList &l )
 			
 			/**
@@ -619,12 +699,12 @@ namespace LockFree
 //			}
 			
 			/// Извлечение всех элементов в потоконебезопасный список
-			Unsafe Release()
+			Unsafe Release() noexcept
 			{
 				return Unsafe( std::move( Top ) );
 			}
 
-			operator bool() const
+			operator bool() const noexcept
 			{
 				return Top.load() != nullptr;
 			}
@@ -640,7 +720,7 @@ namespace LockFree
 				protected:
 					AbstractPtr( const AbstractPtr& ) = delete;
 					AbstractPtr& operator=( const AbstractPtr& ) = delete;
-					AbstractPtr(){}
+					AbstractPtr() noexcept {}
 
 				public:
 					virtual ~AbstractPtr() {}
@@ -657,7 +737,7 @@ namespace LockFree
 					ConcretePtr( const ConcretePtr& ) = delete;
 					ConcretePtr& operator=( const ConcretePtr& ) = delete;
 
-					ConcretePtr( T *ptr ): Ptr( ptr )
+					ConcretePtr( T *ptr ) noexcept: Ptr( ptr )
 					{
 						MY_ASSERT( Ptr != nullptr );
 					}
@@ -711,14 +791,15 @@ namespace LockFree
 					EpochKeeper( const EpochKeeper& ) = delete;
 					EpochKeeper& operator=( const EpochKeeper& ) = delete;
 
-					EpochKeeper( EpochKeeper &&ep_keep ): EpochPtr( ep_keep.EpochPtr ),
-					                                      CounterPtr( ep_keep.CounterPtr )
+					EpochKeeper( EpochKeeper &&ep_keep ) noexcept:
+					    EpochPtr( ep_keep.EpochPtr ),
+					    CounterPtr( ep_keep.CounterPtr )
 					{
 						ep_keep.EpochPtr = nullptr;
 						ep_keep.CounterPtr = nullptr;
 					}
 
-					EpochKeeper& operator=( EpochKeeper &&ep_keep )
+					EpochKeeper& operator=( EpochKeeper &&ep_keep ) noexcept
 					{
 						if( &ep_keep != this )
 						{
@@ -734,11 +815,11 @@ namespace LockFree
 						return *this;
 					}
 
-					EpochKeeper(): EpochPtr( nullptr ), CounterPtr( nullptr ) {}
+					EpochKeeper() noexcept: EpochPtr( nullptr ), CounterPtr( nullptr ) {}
 
 					EpochKeeper( EpochType &ep_ref,
-					             std::atomic<uint16_t> &count_ref ): EpochPtr( &ep_ref ),
-					                                                 CounterPtr( &count_ref )
+					             std::atomic<uint16_t> &count_ref ) noexcept:
+					    EpochPtr( &ep_ref ), CounterPtr( &count_ref )
 					{}
 
 					~EpochKeeper()
@@ -746,7 +827,7 @@ namespace LockFree
 						Release();
 					}
 
-					void Release()
+					void Release() noexcept
 					{
 						MY_ASSERT( ( EpochPtr == nullptr ) == ( CounterPtr == nullptr ) );
 						if( EpochPtr != nullptr )
@@ -818,10 +899,8 @@ namespace LockFree
 				}
 
 				// Увеличиваем текущую эпоху и добавляем ptr в очередь на удаление
-				PtrEpochType new_elem;
-				new_elem.first.reset( ( AbstractPtr* ) new ConcretePtr<T>( ptr ) );
-				new_elem.second = CurrentEpoch++;
-				QueueToDelete.Push( std::move( new_elem ) );
+				QueueToDelete.Emplace( ( AbstractPtr* ) new ConcretePtr<T>( ptr ), CurrentEpoch++ );
+#error "что делать, если ловим std::bad_alloc во время new ConcretePtr<T>( ptr )? ptr удалить прямо сейчас нельзя и сохранить не получается"
 
 				MY_ASSERT( DelPeriod > 0 );
 				if( ( ++DelCount % DelPeriod ) == 0 )
@@ -831,7 +910,7 @@ namespace LockFree
 			} // void Delete( T *ptr )
 
 			/// Удаление элементов очереди, которые возможно удалить
-			void Clear()
+			void Clear() noexcept
 			{
 				// Извлекаем все элементы очереди на удаление
 				auto queue = QueueToDelete.Release();
@@ -860,7 +939,15 @@ namespace LockFree
 					MY_ASSERT( elem.first );
 					return ( elem.second < min_epoch );
 				};
-				queue.RemoveIf( checker );
+				
+				try
+				{
+					queue.RemoveIf( checker );
+				}
+				catch( ... )
+				{
+					MY_ASSERT( false );
+				}
 
 				// Добавляем все неудалённые элементы обратно в очередь
 				QueueToDelete.Push( std::move( queue ) );
@@ -870,7 +957,7 @@ namespace LockFree
 			 * @brief ClearIfNeed Удаление элементов очереди, которые возможно удалить.
 			 * Выполняется, если было выполнено достаточное количество вызовов Delete
 			 */
-			void ClearIfNeed()
+			void ClearIfNeed() noexcept
 			{
 				if( NeedToClean.exchange( false ) )
 				{
@@ -884,7 +971,7 @@ namespace LockFree
 			 * её захвата, удалены не будут)
 			 * @return "хранитель" эпохи
 			 */
-			EpochKeeper EpochAcquire()
+			EpochKeeper EpochAcquire() noexcept
 			{
 				++EpochsCounter;
 				EpochType *ep_ptr = nullptr;
@@ -907,7 +994,7 @@ namespace LockFree
 			} // EpochKeeper EpochAcquire()
 
 			/// Обновление "занятой" эпохи у "хранителя"
-			void UpdateEpoch( EpochKeeper &keeper )
+			void UpdateEpoch( EpochKeeper &keeper ) noexcept
 			{
 				if( keeper.EpochPtr != nullptr )
 				{
@@ -916,7 +1003,7 @@ namespace LockFree
 			}
 	};
 
-	/// Максимальный рекомендованный размер данных очереди на удаление
+	/// Максимальный рекомендованный размер данных очереди на удаление (в байтах)
 	const uint16_t MaxSizeToDelete = 1024;
 	
 	template <typename T>
