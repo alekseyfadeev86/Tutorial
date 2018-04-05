@@ -7,8 +7,6 @@
 #include <memory>
 #include <utility>
 
-#error "использовать std::move_if_noexcept"
-
 #ifndef MY_ASSERT
 #define MY_ASSERT( EXPR )
 #endif
@@ -110,9 +108,8 @@ namespace LockFree
 			StructElementType( T &&val ): Value( std::move( val ) ),
 			                              Next( nullptr ) {}
 
-			template <typename Type, typename ...Types>
-			StructElementType( Type arg,
-			                   Types... args ): Value( arg, args... ),
+			template <typename ...Types>
+			StructElementType( Types... args ): Value( args... ),
 			                                    Next( nullptr ) {}
 		};
 
@@ -180,19 +177,13 @@ namespace LockFree
 		 * @param add_only_one если true - добавляется только new_head,
 		 * иначе - все элементы, что стоят за new_head-ом
 		 * @return был ли head нулевым до его замены
-		 * @throw std::invalid_argument, если new_head == nullptr
 		 */
 		template <typename T>
 		bool PushHead( std::atomic<StructElementType<T>*> &head,
 		               StructElementType<T> *new_head,
-		               bool add_only_one = true )
+		               bool add_only_one = true ) noexcept
 		{
-			if( new_head == nullptr )
-			{
-				MY_ASSERT( false );
-				throw std::invalid_argument( "New head cannot be nullptr" );
-			}
-			
+			MY_ASSERT( new_head != nullptr );
 #ifdef _DEBUG
 			try
 			{
@@ -229,19 +220,13 @@ namespace LockFree
 		 * @param add_only_one если true - добавляется только new_head,
 		 * иначе - все элементы, что стоят за new_head-ом
 		 * @return был ли новый элемент добавлен (если нет - список уже был не пуст)
-		 * @throw std::invalid_argument, если new_head == nullptr
 		 */
 		template <typename T>
 		bool TryPushHead( std::atomic<StructElementType<T>*> &head,
 		                  std::unique_ptr<StructElementType<T>> &new_head,
-		                  bool add_only_one = true )
+		                  bool add_only_one = true ) noexcept
 		{
-			if( !new_head )
-			{
-				MY_ASSERT( false );
-				throw std::invalid_argument( "New head cannot be nullptr" );
-			}
-			
+			MY_ASSERT( new_head );
 #ifdef _DEBUG
 			try
 			{
@@ -389,16 +374,25 @@ namespace LockFree
 			{
 				return Top != nullptr;
 			}
-
+			
 			/**
 			 * @brief Push Добавление элемента в начало списка
 			 * @param new_val новое значение
 			 */
-			void Push( T new_val )
+			void Push( T &&new_val )
 			{
-				ElementType *new_element = new ElementType( std::forward<T>( new_val ) );
+				ElementType *new_element = new ElementType( std::move( new_val ) );
 				new_element->Next = Top;
 				Top = new_element;
+			}
+			
+			/**
+			 * @brief Push Добавление элемента в начало списка
+			 * @param new_val новое значение
+			 */
+			void Push( const T &new_val )
+			{
+				Push( T( new_val ) );
 			}
 
 			/**
@@ -596,15 +590,25 @@ namespace LockFree
 					delete ptr;
 				}
 			}
+			
+			/**
+			 * @brief Push добавляет новый элемент
+			 * @param val добавляемое значение
+			 * @return true, если до добавления список был пуст
+			 */
+			bool Push( const T &val )
+			{
+				return internal::PushHead( Top, new ElementType( val ) );
+			}
 
 			/**
 			 * @brief Push добавляет новый элемент
 			 * @param val добавляемое значение
 			 * @return true, если до добавления список был пуст
 			 */
-			bool Push( T val )
+			bool Push( T &&val )
 			{
-				return internal::PushHead( Top, new ElementType( std::forward<T>( val ) ) );
+				return internal::PushHead( Top, new ElementType( std::move( val ) ) );
 			}
 
 			/**
@@ -647,7 +651,7 @@ namespace LockFree
 			 * @param val добавляемое значение
 			 * @return успешность операции
 			 */
-			bool TryPush( T val )
+			bool TryPush( const T &val )
 			{
 				if( Top.load() != nullptr )
 				{
@@ -655,7 +659,24 @@ namespace LockFree
 					return false;
 				}
 				
-				std::unique_ptr<ElementType> ptr( new ElementType( std::forward<T>( val ) ) );
+				std::unique_ptr<ElementType> ptr( new ElementType( val ) );
+				return internal::TryPushHead( Top, ptr );
+			}
+			
+			/**
+			 * @brief TryPush добавляет новый элемент, если список пуст
+			 * @param val добавляемое значение
+			 * @return успешность операции
+			 */
+			bool TryPush( T &&val )
+			{
+				if( Top.load() != nullptr )
+				{
+					// Список не пуст
+					return false;
+				}
+				
+				std::unique_ptr<ElementType> ptr( new ElementType( std::move( val ) ) );
 				return internal::TryPushHead( Top, ptr );
 			}
 
@@ -899,8 +920,8 @@ namespace LockFree
 				}
 
 				// Увеличиваем текущую эпоху и добавляем ptr в очередь на удаление
-				QueueToDelete.Emplace( ( AbstractPtr* ) new ConcretePtr<T>( ptr ), CurrentEpoch++ );
-#error "что делать, если ловим std::bad_alloc во время new ConcretePtr<T>( ptr )? ptr удалить прямо сейчас нельзя и сохранить не получается"
+				PtrEpochType new_elem( PtrType( ( AbstractPtr* ) new ConcretePtr<T>( ptr ) ), CurrentEpoch++ );
+				QueueToDelete.Push( std::move( new_elem ) );
 
 				MY_ASSERT( DelPeriod > 0 );
 				if( ( ++DelCount % DelPeriod ) == 0 )
@@ -1036,9 +1057,10 @@ namespace LockFree
 			Stack( const Stack& ) = delete;
 			Stack& operator=( const Stack& ) = delete;
 
-			Stack( DeferredDeleter &def_queue ): Head( nullptr ),
-			                                     DefaultQueue(),
-			                                     DefQueue( def_queue ) {}
+			Stack( DeferredDeleter &def_queue ) noexcept:
+			    Head( nullptr ),
+			    DefaultQueue(),
+			    DefQueue( def_queue ) {}
 
 			Stack( uint8_t threads_num,
 			       uint8_t clean_period = GetCleanPeriod<T>() ):
@@ -1066,9 +1088,19 @@ namespace LockFree
 			 * @param val значение нового элемента
 			 * @return true, если до добавления элемента стек был пуст
 			 */
-			bool Push( T val )
+			bool Push( const T &val )
 			{
-				return internal::PushHead( Head, new ElementType( std::forward<T>( val ) ) );
+				return internal::PushHead( Head, new ElementType( val ) );
+			}
+			
+			/**
+			 * @brief Push добавление нового элемента в стек
+			 * @param val значение нового элемента
+			 * @return true, если до добавления элемента стек был пуст
+			 */
+			bool Push( T &&val )
+			{
+				return internal::PushHead( Head, new ElementType( std::move( val ) ) );
 			}
 
 			/**
@@ -1087,7 +1119,7 @@ namespace LockFree
 			 * @param val добавляемое значение
 			 * @return успешность операции
 			 */
-			bool TryPush( T val )
+			bool TryPush( T &&val )
 			{
 				if( Head.load() != nullptr )
 				{
@@ -1095,8 +1127,18 @@ namespace LockFree
 					return false;
 				}
 				
-				std::unique_ptr<ElementType> ptr( new ElementType( std::forward<T>( val ) ) );
+				std::unique_ptr<ElementType> ptr( new ElementType( std::move( val ) ) );
 				return internal::TryPushHead( Head, ptr );
+			}
+			
+			/**
+			 * @brief TryPush добавляет новый элемент, если список пуст
+			 * @param val добавляемое значение
+			 * @return успешность операции
+			 */
+			bool TryPush( const T &val )
+			{
+				return TryPush( T( val ) );
 			}
 
 			/**
@@ -1165,17 +1207,31 @@ namespace LockFree
 				// Отпускаем "эпоху"
 				epoch_keeper.Release();
 
+				bool has_value = false;
 				if( old_head != nullptr )
 				{
 					// Стек не был пуст
-					result = std::move( old_head->Value );
+					has_value = true;
+					try
+					{
+						result = std::move_if_noexcept( old_head->Value );
+					}
+					catch( ... )
+					{
+						// Исключение при копировании - возвращаем элемент обратно в контейнер
+						internal::PushHead( Head, old_head );
+						throw;
+					}
+					
 					DefQueue.Delete( old_head );
-					DefQueue.ClearIfNeed();
 				}
-				else
+				
+				// Удаляем элементы из очереди (если надо)
+				DefQueue.ClearIfNeed();
+				
+				if( !has_value )
 				{
 					// Стек пуст
-					DefQueue.ClearIfNeed();
 					if( default_value_ptr != nullptr )
 					{
 						result = *default_value_ptr;
@@ -1190,7 +1246,7 @@ namespace LockFree
 			} // T Pop
 			
 			/// Очистить очередь на отложенное удаление
-			void CleanDeferredQueue()
+			void CleanDeferredQueue() noexcept
 			{
 				DefQueue.Clear();
 			}
@@ -1237,10 +1293,11 @@ namespace LockFree
 			 * @param def_deleter ссылка на очередь на отложенное удаление
 			 */
 			DigitsQueue( Type fake_value,
-			             DeferredDeleter &def_deleter ): FakeValue( fake_value ),
-			                                             Head( nullptr ), Tail( nullptr ),
-			                                             DefaultQueue(),
-			                                             DefQueue( def_deleter )
+			             DeferredDeleter &def_deleter ) noexcept:
+			    FakeValue( fake_value ),
+			    Head( nullptr ), Tail( nullptr ),
+			    DefaultQueue(),
+			    DefQueue( def_deleter )
 			{
 				Init();
 			}
@@ -1304,7 +1361,7 @@ namespace LockFree
 					// Создаём новый фиктивный элемент, если нужно
 					if( !new_elem )
 					{
-						new_elem = std::unique_ptr<ElementType>( new ElementType( FakeValue ) );
+						new_elem.reset( new ElementType( FakeValue ) );
 						MY_ASSERT( new_elem && ( new_elem.get()->Value.load() == FakeValue ) );
 					}
 
@@ -1332,7 +1389,7 @@ namespace LockFree
 					// К этому моменту expected_elem_ptr хранит значение old_tail->Next
 					MY_ASSERT( expected_elem_ptr != nullptr );
 
-					// Записываем в Tail указатель на новый хвост
+					// Пытаемся записать в Tail указатель на новый хвост
 					Tail.compare_exchange_strong( old_tail, expected_elem_ptr );
 				} // while( val != FakeValue )
 			} // void Push( Type val )
@@ -1348,8 +1405,12 @@ namespace LockFree
 			 * если очередь пуста - будет возвращено фиктивное значение
 			 * @return элемент из головы очереди
 			 */
-			Type Pop()
+			Type Pop() noexcept
 			{
+#ifdef _DEBUG
+				try
+				{
+#endif
 				Type res = FakeValue;
 				auto epoch_keeper = DefQueue.EpochAcquire();
 				ElementType *old_head = Head.load();
@@ -1378,10 +1439,18 @@ namespace LockFree
 				DefQueue.ClearIfNeed();
 				
 				return res;
+#ifdef _DEBUG
+				}
+				catch( ... )
+				{
+					MY_ASSERT( false );
+					throw;
+				}
+#endif
 			} // Type Pop()
 			
 			/// Очистить очередь на отложенное удаление
-			void CleanDeferredQueue()
+			void CleanDeferredQueue() noexcept
 			{
 				DefQueue.Clear();
 			}
@@ -1411,7 +1480,7 @@ namespace LockFree
 			Queue( const Queue& ) = delete;
 			Queue& operator=( const Queue& ) = delete;
 
-			Queue( DeferredDeleter &def_deleter ): PtrsQueue( 0, def_deleter )
+			Queue( DeferredDeleter &def_deleter ) noexcept: PtrsQueue( 0, def_deleter )
 			{}
 
 			Queue( uint8_t threads_num,
@@ -1426,6 +1495,16 @@ namespace LockFree
 				}
 			}
 
+			/**
+			 * @brief Push добавление нового элемента в хвост очереди
+			 * @param val новое значение
+			 */
+			void Push( T &&val )
+			{
+				std::unique_ptr<T> val_smart_ptr( new T( std::move( val ) ) );
+				PushElement( val_smart_ptr );
+			}
+			
 			/**
 			 * @brief Push добавление нового элемента в хвост очереди
 			 * @param val новое значение
@@ -1468,7 +1547,7 @@ namespace LockFree
 			}
 			
 			/// Очистить очередь на отложенное удаление
-			void CleanDeferredQueue()
+			void CleanDeferredQueue() noexcept
 			{
 				PtrsQueue.CleanDeferredQueue();
 			}
