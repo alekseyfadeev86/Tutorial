@@ -139,6 +139,7 @@ namespace LockFree
 			                                    Next( nullptr ) {}
 
 			void operator delete( void* ) {}
+#error "TODO: проверить утечку памяти в контейнерах (добавить счётчик в StructElementType и проверять его)"
 		};
 #endif // #ifdef UNITTEST
 
@@ -1033,6 +1034,43 @@ namespace LockFree
 		size_t sz = sizeof( T );
 		return ( uint16_t ) ( MaxSizeToDelete / ( sz == 0 ? 1 : sz ) );
 	}
+	
+	namespace internal
+	{
+		// Формирование "хранителя" для извлекаемого из контейнера элемента
+		template <typename T>
+		std::unique_ptr<T, std::function<void( T* )>>
+		MakePtrWithDeleter( DeferredDeleter &del )
+		{
+			auto h = [ &del ]( T *ptr )
+			{
+				MY_ASSERT( ptr != nullptr );
+				while( true )
+				{
+					try
+					{
+						del.Delete( ptr );
+						break;
+					}
+#ifdef _DEBUG
+					catch( const std::bad_alloc& )
+					{
+						// По идее, других исключений быть не должно
+					}
+#endif
+					catch( ... )
+					{
+						// Повторяем в надежде, что другие потоки
+						// освободят эпохи, что позволит удалить
+						// old_head сразу, минуя очередь
+						// (в этом случае исключений 100% не будет)
+						MY_ASSERT( false );
+					}
+				} // while( true )
+			};
+			return std::unique_ptr<T, std::function<void( T* )>>( nullptr, h );
+		} // MakePtrWithDeleter( T *ptr, DeferredDeleter &del )
+	} // namespace internal
 
 	/// Класс стека (последний пришёл - первый вышел)
 	template <typename T>
@@ -1182,12 +1220,15 @@ namespace LockFree
 				auto epoch_keeper = DefQueue.EpochAcquire();
 
 				auto old_head = Head.load();
+				
+				auto old_head_keeper = internal::MakePtrWithDeleter<ElementType>( DefQueue );
+				MY_ASSERT( !old_head_keeper );
 
 				// Извлекаем первый элемент из головы списка,
 				// помещаем в голову следующий элемент
 				while( old_head != nullptr )
 				{
-					MY_ASSERT( old_head != nullptr );
+					MY_ASSERT( !old_head_keeper );
 
 					// Получаем указатель на элемент, следующий за головным
 					auto new_head = old_head->Next.load();
@@ -1196,6 +1237,7 @@ namespace LockFree
 					if( Head.compare_exchange_weak( old_head, new_head ) )
 					{
 						// Получилось
+						old_head_keeper.reset( old_head );
 						if( is_empty != nullptr )
 						{
 							*is_empty = new_head == nullptr;
@@ -1207,24 +1249,26 @@ namespace LockFree
 				// Отпускаем "эпоху"
 				epoch_keeper.Release();
 
-				bool has_value = false;
-				if( old_head != nullptr )
+				const bool has_value = ( bool ) old_head_keeper;
+				if( old_head_keeper )
 				{
 					// Стек не был пуст
-					has_value = true;
 					try
 					{
-						result = std::move_if_noexcept( old_head->Value );
+						result = std::move_if_noexcept( old_head_keeper->Value );
+						
+						// Помещаем бывший головной элемент в очередь на удаление
+						old_head_keeper.reset();
 					}
 					catch( ... )
 					{
 						// Исключение при копировании - возвращаем элемент обратно в контейнер
-						internal::PushHead( Head, old_head );
+						internal::PushHead( Head, old_head_keeper.release() );
+						MY_ASSERT( !old_head_keeper );
 						throw;
 					}
-					
-					DefQueue.Delete( old_head );
 				}
+				MY_ASSERT( !old_head_keeper );
 				
 				// Удаляем элементы из очереди (если надо)
 				DefQueue.ClearIfNeed();
@@ -1402,8 +1446,8 @@ namespace LockFree
 
 			/**
 			 * @brief Pop извлечение элемента из головы очереди
-			 * если очередь пуста - будет возвращено фиктивное значение
-			 * @return элемент из головы очереди
+			 * @return элемент из головы очереди, либо фиктивное
+			 * значение, если очередь пуста
 			 */
 			Type Pop() noexcept
 			{
@@ -1414,10 +1458,14 @@ namespace LockFree
 				Type res = FakeValue;
 				auto epoch_keeper = DefQueue.EpochAcquire();
 				ElementType *old_head = Head.load();
+				
+				auto old_head_keeper = internal::MakePtrWithDeleter<ElementType>( DefQueue );
+				MY_ASSERT( !old_head_keeper );
 
 				while( res == FakeValue )
 				{
 					MY_ASSERT( old_head != nullptr );
+					MY_ASSERT( !old_head_keeper );
 					if( old_head == Tail.load() )
 					{
 						// Очередь состоит из одного элемента (считаем, что пуста)
@@ -1429,13 +1477,20 @@ namespace LockFree
 					if( Head.compare_exchange_weak( old_head, new_head ) )
 					{
 						// Элемент из головы очереди извлечён
+						old_head_keeper.reset( old_head );
 						res = old_head->Value.load();
 						MY_ASSERT( res != FakeValue );
 					}
 				} // while( res == FakeValue )
 
-				// Отпускаем эпоху, удаляем элементы очереди, которые можно
+				// Отпускаем эпоху
 				epoch_keeper.Release();
+				
+				// Помещаем бывший головной элемент в очередь на удаление
+				// (если он был извлечён)
+				old_head_keeper.reset();
+
+				// Удаляем элементы очереди, которые можно
 				DefQueue.ClearIfNeed();
 				
 				return res;
