@@ -100,7 +100,7 @@ namespace LockFree
 			/// Указатель на следующий элемент
 			std::atomic<StructElementType*> Next;
 
-			StructElementType(): Value(), Next( nullptr ) {}
+			StructElementType(): Value(), Next( nullptr ){}
 
 			StructElementType( const T &val ): Value( val ),
 			                                   Next( nullptr ) {}
@@ -117,29 +117,71 @@ namespace LockFree
 		template<>
 		struct StructElementType<DebugStruct>
 		{
-			/// Значение
-			DebugStruct Value;
+			private:
+				bool WasDeleted;
+	
+				static int64_t CounterWork( char mode )
+				{
+					static std::atomic<int64_t> Counter( 0 );
+	
+					if( mode > 0 )
+					{
+						return ++Counter;
+					}
+	
+					if( mode < 0 )
+					{
+						return --Counter;
+					}
+	
+					return Counter.load();
+				}
+				
+			public:
+				/// Значение
+				DebugStruct Value;
+	
+				/// Указатель на следующий элемент
+				std::atomic<StructElementType*> Next;
+	
+				StructElementType(): Value(), Next( nullptr )
+				{
+					CounterWork( 1 );
+				}
+	
+				template<typename Type>
+				StructElementType( const Type &val ): Value( val ),
+													  Next( nullptr )
+				{
+					CounterWork( 1 );
+				}
+	
+				template<typename Type>
+				StructElementType( Type &&val ): Value( std::move( val ) ),
+												 Next( nullptr )
+				{
+					CounterWork( 1 );
+				}
+	
+				template <typename Type, typename ...Types>
+				StructElementType( Type arg,
+								   Types... args ): Value( arg ),
+													Next( nullptr )
+				{
+					CounterWork( 1 );
+				}
+				
+				~StructElementType()
+				{
+					CounterWork( -1 );
+				}
+				
+				static int64_t GetCounter()
+				{
+					return CounterWork( 0 );
+				}
 
-			/// Указатель на следующий элемент
-			std::atomic<StructElementType*> Next;
-
-			StructElementType(): Value(), Next( nullptr ) {}
-
-			template<typename Type>
-			StructElementType( const Type &val ): Value( val ),
-			                                      Next( nullptr ) {}
-
-			template<typename Type>
-			StructElementType( Type &&val ): Value( std::move( val ) ),
-			                                 Next( nullptr ) {}
-
-			template <typename Type, typename ...Types>
-			StructElementType( Type arg,
-			                   Types... args ): Value( arg ),
-			                                    Next( nullptr ) {}
-
-			void operator delete( void* ) {}
-#error "TODO: проверить утечку памяти в контейнерах (добавить счётчик в StructElementType и проверять его)"
+				void operator delete( void* ) {}
 		};
 #endif // #ifdef UNITTEST
 
@@ -921,7 +963,11 @@ namespace LockFree
 				}
 
 				// Увеличиваем текущую эпоху и добавляем ptr в очередь на удаление
-				PtrEpochType new_elem( PtrType( ( AbstractPtr* ) new ConcretePtr<T>( ptr ) ), CurrentEpoch++ );
+				PtrEpochType new_elem( PtrType( ( AbstractPtr* ) new ConcretePtr<T>( ptr ) ),
+				                                CurrentEpoch++ );
+#ifndef _DEBUG
+#error "? учесть переполнение 64-битного CurrentEpoch-а ?"
+#endif
 				QueueToDelete.Push( std::move( new_elem ) );
 
 				MY_ASSERT( DelPeriod > 0 );

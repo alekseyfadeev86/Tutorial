@@ -4,46 +4,48 @@
 
 namespace Bicycle
 {
-	SpinLock::SpinLock()
+	SpinLock::SpinLock() noexcept
 	{
 		Flag.clear();
 	}
 	
-	void SpinLock::Lock()
+	void SpinLock::Lock() noexcept
 	{
 		while( Flag.test_and_set() )
 		{}
 	}
 	
-	void SpinLock::Unlock()
+	void SpinLock::Unlock() noexcept
 	{
 		Flag.clear();
 	}
 
 	//------------------------------------------------------------------------------
 	
-	SharedSpinLock::SharedSpinLock(): Flag( 0 ) {}
+	SharedSpinLock::SharedSpinLock() noexcept: Flag( 0 ) {}
 	
 	const uint64_t LockingFlag = 0x4000000000000000;
 	const uint64_t LockedFlag  = LockingFlag | 0x8000000000000000;
 	
-	void SharedSpinLock::Lock()
+	void SharedSpinLock::Lock() noexcept
 	{
 		uint64_t expected = 0;
 		while( 1 )
 		{
 			expected = 0;
+			// Пытаемся захватить блокировку на запись
 			if( Flag.compare_exchange_weak( expected, LockedFlag ) )
 			{
-				// Блокировка на запись была захвачена текущим потоком (до этого никто не претендовал)
+				// Успех
 				break;
 			}
 			else if( expected == LockingFlag )
 			{
-				// Какой-то (возможно, текущий) поток уже претендует на монопольную блокировку
+				// Какой-то (возможно, текущий) поток уже претендует
+				// на монопольную блокировку, пытаемся захватить её
 				if( Flag.compare_exchange_weak( expected, LockedFlag ) )
 				{
-					// Блокировка на запись была захвачена текущим потоком
+					// Успех
 					break;
 				}
 			}
@@ -53,25 +55,29 @@ namespace Bicycle
 		}
 	} // void SharedSpinLock::Lock()
 	
-	void SharedSpinLock::SharedLock()
+	void SharedSpinLock::SharedLock() noexcept
 	{
 		uint64_t expected = 0;
 		while( 1 )
 		{
 			expected = Flag.load();
+			MY_ASSERT( ( 1 & ( expected >> 61 ) ) == 0 );
 			if( ( expected & LockedFlag ) == 0 )
 			{
 				// Монопольная блокировка не захвачена и никто на неё не претендует
 				if( Flag.compare_exchange_weak( expected, expected + 1 ) )
 				{
 					// Разделяемая блокировка захвачена текущим потоком
+#ifndef _DEBUG
+#error "? учитывать переполнение счётчика ?"
+#endif
 					break;
 				}
 			}
 		}
 	} // void SharedSpinLock::SharedLock()
 	
-	void SharedSpinLock::Unlock()
+	void SharedSpinLock::Unlock() noexcept
 	{
 		uint64_t expected = 0;
 		uint64_t new_val = 0;
@@ -95,6 +101,11 @@ namespace Bicycle
 	
 	//---------------------------------------------------------------------------------------------
 	
+	bool CancellableTask::IsCancelled() const noexcept
+	{
+		return WasCancelled.load();
+	}
+	
 	void CancellableTask::operator ()()
 	{
 		if( !WasCancelled.exchange( true ) )
@@ -105,17 +116,12 @@ namespace Bicycle
 		}
 	}
 
-	bool CancellableTask::IsCancelled() const
-	{
-		return WasCancelled.load();
-	}
-	
-	CancellableTask::operator bool() const
+	CancellableTask::operator bool() const noexcept
 	{
 		return !IsCancelled();
 	}
 	
-	bool CancellableTask::Cancel()
+	bool CancellableTask::Cancel() noexcept
 	{
 		return !WasCancelled.exchange( true );
 	}

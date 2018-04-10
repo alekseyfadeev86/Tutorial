@@ -54,14 +54,14 @@ namespace Bicycle
 		Error( const Error& ) = default;
 		Error& operator=( const Error& ) = default;
 
-		Error( Error &&err );
+		Error( Error &&err ) noexcept;
 		Error& operator=( Error &&err );
 
 		Error( err_code_t err_code = ErrorCodes::Success,
 		       const string &what = string() );
 
 		Error( err_code_t err_code, const char *what );
-		Error( err_code_t err_code, string &&what );
+		Error( err_code_t err_code, string &&what ) noexcept;
 
 		/**
 		 * @brief operator bool возвращает true, если Code != Success
@@ -82,13 +82,13 @@ namespace Bicycle
 		           const char *what );
 	};
 
-	Error GetSystemErrorByCode( err_code_t err_code );
+	Error GetSystemErrorByCode( err_code_t err_code ) noexcept;
 
 	/**
 	 * @brief GetLastSystemError возвращает последнюю системную ошибку
 	 * @return структура с описанием ошибки
 	 */
-	Error GetLastSystemError();
+	Error GetLastSystemError() noexcept;
 
 	/**
 	 * @brief ThrowIfNeed получает код последней системной ошибки

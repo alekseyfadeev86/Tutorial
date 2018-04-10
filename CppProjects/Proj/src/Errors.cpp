@@ -24,8 +24,8 @@ namespace Bicycle
 #endif
 	}
 
-	Error::Error( Error &&err ): Code( err.Code ),
-	                             What( std::move(  err.What ) )
+	Error::Error( Error &&err ) noexcept:
+	    Code( err.Code ), What( std::move(  err.What ) )
 	{
 		err.Code = ErrorCodes::Success;
 	}
@@ -53,8 +53,8 @@ namespace Bicycle
 	{}
 
 	Error::Error( err_code_t err_code,
-	              string &&what ): Code( err_code ),
-	                               What( std::move( what ) )
+	              string &&what ) noexcept: Code( err_code ),
+	                                        What( std::move( what ) )
 	{}
 
 	Error::operator bool() const
@@ -80,13 +80,29 @@ namespace Bicycle
 	                                          ErrorCode( err_code )
 	{}
 
-	Error GetSystemErrorByCode( err_code_t err_code )
+	Error GetSystemErrorByCode( err_code_t err_code ) noexcept
 	{
+#ifdef _DEBUG
+		try
+		{
+#endif
 		return Error( err_code, StrErrorByCode( err_code ) );
+#ifdef _DEBUG
+		}
+		catch( ... )
+		{
+			MY_ASSERT( false );
+			throw;
+		}
+#endif
 	}
 
-	Error GetLastSystemError()
+	Error GetLastSystemError() noexcept
 	{
+#ifdef _DEBUG
+		try
+		{
+#endif
 		err_code_t err = 0;
 
 #if defined( _WIN32) || defined(_WIN64)
@@ -98,6 +114,14 @@ namespace Bicycle
 #endif
 
 		return Error( err, StrErrorByCode( err ) );
+#ifdef _DEBUG
+		}
+		catch( ... )
+		{
+			MY_ASSERT( false );
+			throw;
+		}
+#endif
 	}
 
 	void ThrowIfNeed()

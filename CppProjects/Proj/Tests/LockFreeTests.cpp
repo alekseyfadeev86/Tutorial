@@ -1026,10 +1026,18 @@ void lockfree_test()
 {
 	try
 	{
+		using namespace LockFree::internal;
 		forward_list_test();
+		MY_CHECK_ASSERT( StructElementType<LockFree::DebugStruct>::GetCounter() == 0 );
+		
 		deferred_deleter_test();
+		MY_CHECK_ASSERT( StructElementType<LockFree::DebugStruct>::GetCounter() == 0 );
+		
 		stack_test();
+		MY_CHECK_ASSERT( StructElementType<LockFree::DebugStruct>::GetCounter() == 0 );
+		
 		queue_test();
+		MY_CHECK_ASSERT( StructElementType<LockFree::DebugStruct>::GetCounter() == 0 );
 	}
 	catch( const std::exception &exc )
 	{

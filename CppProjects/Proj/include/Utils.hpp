@@ -25,13 +25,13 @@ namespace Bicycle
 			SpinLock( const SpinLock& ) = delete;
 			SpinLock& operator=( const SpinLock& ) = delete;
 			
-			SpinLock();
+			SpinLock() noexcept;
 			
 			/// Захват блокировки
-			void Lock();
+			void Lock() noexcept;
 			
 			/// Освобождение блокировки
-			void Unlock();
+			void Unlock() noexcept;
 	};
 	
 	/// Класс "спин-лока" с возможностью захвата разделяемой блокировки
@@ -44,16 +44,16 @@ namespace Bicycle
 			SharedSpinLock( const SharedSpinLock& ) = delete;
 			SharedSpinLock& operator=( const SharedSpinLock& ) = delete;
 			
-			SharedSpinLock();
+			SharedSpinLock() noexcept;
 			
 			/// Захват монопольной блокировки
-			void Lock();
+			void Lock() noexcept;
 			
 			/// Захват разделяемой блокировки
-			void SharedLock();
+			void SharedLock() noexcept;
 			
 			/// Освобождение блокировки
-			void Unlock();
+			void Unlock() noexcept;
 	};
 	
 	template <typename T>
@@ -322,7 +322,7 @@ namespace Bicycle
 			}
 
 			/// Показывает, была ли задача отменена
-			bool IsCancelled() const;
+			bool IsCancelled() const noexcept;
 			
 			/**
 			 * @brief operator () потокобезопасное выполнение задачи:
@@ -332,14 +332,14 @@ namespace Bicycle
 			void operator()();
 			
 			/// Возвращает true, если задача не была отменена
-			operator bool() const;
+			operator bool() const noexcept;
 			
 			/**
 			 * @brief Cancel отмена задачи (потокобезопасная)
 			 * @return false, если задача уже была выполнена
 			 * или отменена
 			 */
-			bool Cancel();
+			bool Cancel() noexcept;
 	};
 	
 	/// Класс очереди задач с указанием времени их выполнения
