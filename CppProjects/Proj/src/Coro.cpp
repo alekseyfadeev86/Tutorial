@@ -80,8 +80,9 @@ namespace Bicycle
 			CoroInfo( const CoroInfo& ) = delete;
 			CoroInfo& operator=( const CoroInfo& ) = delete;
 
-			CoroInfo( Coroutine &main_coro ): CurrentCoro( &main_coro ),
-			                                  NextCoro( nullptr )
+			CoroInfo( Coroutine &main_coro ) noexcept:
+			    CurrentCoro( &main_coro ),
+			    NextCoro( nullptr )
 			{}
 		};
 
@@ -90,7 +91,8 @@ namespace Bicycle
 #if defined( _WIN32) || defined(_WIN64)
 		VOID CALLBACK Coroutine::CoroutineFunc( PVOID param )
 #else
-		Coroutine::Array::Array( size_t sz ): Ptr( sz > 0 ? new char[ sz ] : nullptr ), Sz( sz )
+		Coroutine::Array::Array( size_t sz ):
+		    Ptr( sz > 0 ? new char[ sz ] : nullptr ), Sz( sz )
 		{}
 
 		Coroutine::Array::~Array()
@@ -110,7 +112,17 @@ namespace Bicycle
 			MY_ASSERT( task_coro_ptr->second != nullptr );
 			MY_ASSERT( task_coro_ptr->first );
 
-			CoroInfo *info = ( CoroInfo* ) Internal.Get();
+			CoroInfo *info = nullptr;
+			try
+			{
+				info = ( CoroInfo* ) Internal.Get();
+			}
+			catch( ... )
+			{
+				// Очень маловероятно
+				info = nullptr;
+			}
+			
 			if( info == nullptr )
 			{
 				// Вызвали функцию не из сопрограммы
@@ -296,6 +308,7 @@ namespace Bicycle
 		bool Coroutine::SwitchTo( Coroutine **prev_coro )
 		{
 			CoroInfo *coro_info = ( CoroInfo* ) Internal.Get();
+			MY_ASSERT( ( coro_info == nullptr ) || ( coro_info->CurrentCoro != nullptr ) );
 			Coroutine *cur_coro = coro_info != nullptr ? coro_info->CurrentCoro : nullptr;
 
 			if( cur_coro == nullptr )
@@ -324,8 +337,8 @@ namespace Bicycle
 				// Сопрограмма уже выполняется или завершена
 				return false;
 			}
-
-			Started = true;
+			
+			//Started = true;
 
 			// Нужно, чтобы обращаться к объекту после смены контекста
 			coro_info->NextCoro = this;
@@ -360,6 +373,9 @@ namespace Bicycle
 			coro_info->CurrentCoro = coro_info->NextCoro;
 			coro_info->NextCoro = nullptr;
 
+			// Отмечаем, что сопрограмма, на которую переключились, начала работать
+			coro_info->CurrentCoro->Started = true;
+
 			if( prev_coro != nullptr )
 			{
 				*prev_coro = cur_coro;
@@ -367,7 +383,7 @@ namespace Bicycle
 			return true;
 		} // bool Coroutine::SwitchTo( Coroutine **prev_coro )
 
-		bool Coroutine::IsDone() const
+		bool Coroutine::IsDone() const noexcept
 		{
 			return StateFlag.load() == FinishedFlag;
 		}

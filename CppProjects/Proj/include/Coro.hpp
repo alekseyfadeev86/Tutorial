@@ -42,10 +42,25 @@ namespace Bicycle
 				ThreadLocal( const ThreadLocal& ) = delete;
 				ThreadLocal& operator=( const ThreadLocal& ) = delete;
 
+				/**
+				 * @brief ThreadLocal конструктор хранилища
+				 * @throw Error в случае ошибки
+				 */
 				ThreadLocal();
 				~ThreadLocal();
 
+				/**
+				 * @brief Get получение хранимого указателя
+				 * @return хранимый указатель
+				 * @throw Error в случае ошибки
+				 */
 				void* Get() const;
+				
+				/**
+				 * @brief Set установка хранимого указателя
+				 * @param ptr задаваемое значение
+				 * @throw Error в случае ошибки
+				 */
 				void Set( void *ptr );
 		};
 
@@ -140,7 +155,7 @@ namespace Bicycle
 				bool SwitchTo( Coroutine **prev_coro = nullptr );
 
 				/// Показывает, завершена ли сопрограмма
-				bool IsDone() const;
+				bool IsDone() const noexcept;
 		};
 
 		/// Возвращает указатель на текущую сопрограмму
