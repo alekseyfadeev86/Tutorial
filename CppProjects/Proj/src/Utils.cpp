@@ -33,6 +33,7 @@ namespace Bicycle
 		while( 1 )
 		{
 			expected = 0;
+			
 			// Пытаемся захватить блокировку на запись
 			if( Flag.compare_exchange_weak( expected, LockedFlag ) )
 			{
@@ -50,7 +51,7 @@ namespace Bicycle
 				}
 			}
 			
-			// Помечаем во флаге, что "претендуем" на монопольную блокировку
+			// Пытаемся пометить во флаге, что "претендуем" на монопольную блокировку
 			Flag.compare_exchange_weak( expected, LockingFlag | expected );
 		}
 	} // void SharedSpinLock::Lock()
@@ -68,9 +69,6 @@ namespace Bicycle
 				if( Flag.compare_exchange_weak( expected, expected + 1 ) )
 				{
 					// Разделяемая блокировка захвачена текущим потоком
-#ifndef _DEBUG
-#error "? учитывать переполнение счётчика ?"
-#endif
 					break;
 				}
 			}

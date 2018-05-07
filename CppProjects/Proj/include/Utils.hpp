@@ -109,7 +109,7 @@ namespace Bicycle
 			UniqueLocker( const UniqueLocker& ) = delete;
 			UniqueLocker& operator=( const UniqueLocker& ) = delete;
 
-			UniqueLocker(): Locker( nullptr ), IsLocked( false ) {}
+			UniqueLocker() noexcept: Locker( nullptr ), IsLocked( false ) {}
 
 			UniqueLocker( T &l, bool lock = true ): Locker( &l ), IsLocked( false )
 			{
@@ -120,7 +120,7 @@ namespace Bicycle
 				}
 			}
 
-			UniqueLocker( UniqueLocker &&l ): Locker( l.Locker ), IsLocked( l.IsLocked )
+			UniqueLocker( UniqueLocker &&l ) noexcept: Locker( l.Locker ), IsLocked( l.IsLocked )
 			{
 				l.Locker = nullptr;
 				l.IsLocked = false;
@@ -153,12 +153,12 @@ namespace Bicycle
 				}
 			}
 
-			operator bool() const
+			operator bool() const noexcept
 			{
 				return Locker != nullptr;
 			}
 
-			bool Locked() const
+			bool Locked() const noexcept
 			{
 				return IsLocked;
 			}
@@ -194,7 +194,7 @@ namespace Bicycle
 			SharedLocker( const SharedLocker& ) = delete;
 			SharedLocker& operator=( const SharedLocker& ) = delete;
 
-			SharedLocker(): Locker( nullptr ), IsLocked( false ) {}
+			SharedLocker() noexcept: Locker( nullptr ), IsLocked( false ) {}
 
 			SharedLocker( T &l, bool lock ): Locker( &l ), IsLocked( false )
 			{
@@ -205,7 +205,7 @@ namespace Bicycle
 				}
 			}
 
-			SharedLocker( SharedLocker &&l ): Locker( l.Locker ), IsLocked( l.IsLocked )
+			SharedLocker( SharedLocker &&l ) noexcept: Locker( l.Locker ), IsLocked( l.IsLocked )
 			{
 				l.Locker = nullptr;
 				l.IsLocked = false;
@@ -238,12 +238,12 @@ namespace Bicycle
 				}
 			}
 
-			operator bool() const
+			operator bool() const noexcept
 			{
 				return Locker != nullptr;
 			}
 
-			bool Locked() const
+			bool Locked() const noexcept
 			{
 				return IsLocked;
 			}

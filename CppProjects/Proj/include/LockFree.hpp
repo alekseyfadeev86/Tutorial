@@ -965,9 +965,6 @@ namespace LockFree
 				// Увеличиваем текущую эпоху и добавляем ptr в очередь на удаление
 				PtrEpochType new_elem( PtrType( ( AbstractPtr* ) new ConcretePtr<T>( ptr ) ),
 				                                CurrentEpoch++ );
-#ifndef _DEBUG
-#error "? учесть переполнение 64-битного CurrentEpoch-а ?"
-#endif
 				QueueToDelete.Push( std::move( new_elem ) );
 
 				MY_ASSERT( DelPeriod > 0 );
