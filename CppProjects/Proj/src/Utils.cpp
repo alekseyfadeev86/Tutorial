@@ -131,76 +131,100 @@ namespace Bicycle
 
 		while( RunFlag.load() )
 		{
+			std::unique_lock<std::mutex> lock;
+			
 			// Считываем новые задачи, сортируем их по времени сработки
 			auto new_elems = Tasks.Release();
-			while( new_elems )
-			{
-				tasks_map.insert( new_elems.Pop() );
-			}
-			MY_ASSERT( !new_elems );
-
 			bool timeout_expired = false;
-			std::unique_lock<std::mutex> lock( Mut );
-			MY_ASSERT( lock );
-			if( !RunFlag.load() )
+#error "TODO: обрабатывать исключения (например? std::bad_alloc)"
+			
+			try
 			{
-				// Завершаем работу
-				break;
-			}
-			else if( Tasks )
-			{
-				// Появились новые задачи
-				continue;
-			}
-
-			// Удаляем отменённые задачи
-			if( !tasks_map.empty() )
-			{
-				const auto begin = tasks_map.begin();
-				auto remove_iter = begin;
-				for( auto end = tasks_map.end(); remove_iter != end; ++remove_iter )
+				while( new_elems )
 				{
-					if( *( remove_iter->second ) )
-					{
-						// Наткнулись на актуальную задачу
-						break;
-					}
+					tasks_map.insert( new_elems.Pop() );
+				}
+				MY_ASSERT( !new_elems );
+				
+				lock = std::unique_lock<std::mutex>( Mut );
+				MY_ASSERT( lock );
+				if( !RunFlag.load() )
+				{
+					// Завершаем работу
+					break;
+				}
+				else if( Tasks )
+				{
+					// Появились новые задачи
+					continue;
 				}
 				
-				tasks_map.erase( begin, remove_iter );
-			}
-			
-			if( tasks_map.empty() )
-			{		
-				Cv.wait( lock );
-			}
-			else
-			{
-				const auto tp = tasks_map.begin()->first;
-				timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
-			}
-			lock.unlock();
-
-			if( timeout_expired )
-			{
-				// Сработка таймера
-				// Определяем текущее время и диапазон обрабатываемых элементов
-				// (время у которых не позже текущего)
-				const auto tp = clock_type::now();
-				const auto begin = tasks_map.begin();
-				const auto end = tasks_map.upper_bound( tp );
-
-				for( auto iter = begin; iter != end; ++iter )
+				// Удаляем отменённые задачи
+				if( !tasks_map.empty() )
 				{
-					MY_ASSERT( iter->first <= tp );
-					MY_ASSERT( iter->second );
-					MY_ASSERT( *( iter->second ) );
-					( *iter->second )();
-				} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
-			
-				// Удаляем обработанные элементы
-				tasks_map.erase( begin, end );
-			} // if( timeout_expired )
+					const auto begin = tasks_map.begin();
+					auto remove_iter = begin;
+					for( auto end = tasks_map.end(); remove_iter != end; ++remove_iter )
+					{
+						if( *( remove_iter->second ) )
+						{
+							// Наткнулись на актуальную задачу
+							break;
+						}
+					}
+					
+					tasks_map.erase( begin, remove_iter );
+				}
+				
+				if( tasks_map.empty() )
+				{		
+					Cv.wait( lock );
+				}
+				else
+				{
+					const auto tp = tasks_map.begin()->first;
+					timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
+				}
+				lock.unlock();
+
+				if( timeout_expired )
+				{
+					// Сработка таймера
+					// Определяем текущее время и диапазон обрабатываемых элементов
+					// (время у которых не позже текущего)
+					const auto tp = clock_type::now();
+					const auto begin = tasks_map.begin();
+					const auto end = tasks_map.upper_bound( tp );
+	
+					for( auto iter = begin; iter != end; ++iter )
+					{
+						MY_ASSERT( iter->first <= tp );
+						MY_ASSERT( iter->second );
+						MY_ASSERT( *( iter->second ) );
+						try
+						{
+							( *iter->second )();
+						}
+						catch( ... )
+						{
+							MY_ASSERT( false );
+						}
+					} // for( ; ( iter != end ) && ( iter->first <= tp ); ++iter )
+				
+					// Удаляем обработанные элементы
+					tasks_map.erase( begin, end );
+				} // if( timeout_expired )
+			}
+#ifdef _DEBUG
+			catch( ... )
+#else
+#error "? или так ?"
+			catch( const std::bad_alloc& )
+#endif
+			{
+				Tasks.Push( std::move( new_elems ) );
+				continue;
+			}
 		} // while( RunFlag.load() )
 	} // void TimeTasksQueue::ThreadFunc()
 
