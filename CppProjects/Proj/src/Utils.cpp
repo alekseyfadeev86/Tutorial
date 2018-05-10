@@ -136,13 +136,25 @@ namespace Bicycle
 			// Считываем новые задачи, сортируем их по времени сработки
 			auto new_elems = Tasks.Release();
 			bool timeout_expired = false;
-#error "TODO: обрабатывать исключения (например? std::bad_alloc)"
+			
+			elem_type task_element;
+			bool element_was_left = false;
 			
 			try
 			{
+				if( element_was_left )
+				{
+					tasks_map.insert( task_element );
+					element_was_left = false;
+				}
+				
 				while( new_elems )
 				{
-					tasks_map.insert( new_elems.Pop() );
+					MY_ASSERT( !element_was_left );
+					new_elems.Pop( task_element );
+					element_was_left = true;
+					tasks_map.insert( task_element );
+					element_was_left = false;
 				}
 				MY_ASSERT( !new_elems );
 				
@@ -182,7 +194,7 @@ namespace Bicycle
 				}
 				else
 				{
-					const auto tp = tasks_map.begin()->first;
+					const auto &tp = tasks_map.begin()->first;
 					timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
 				}
 				lock.unlock();
@@ -216,9 +228,10 @@ namespace Bicycle
 				} // if( timeout_expired )
 			}
 #ifdef _DEBUG
-			catch( ... )
+			catch( const std::exception& )
 #else
-#error "? или так ?"
+#error "? или выбрать более конкретный тип исключений ?"
+#error "? ограничить макс. число перехватываемых исключений подряд (например, 2 исключения подряд перехватили, а 3е - нет) ?"
 			catch( const std::bad_alloc& )
 #endif
 			{
@@ -246,6 +259,8 @@ namespace Bicycle
 		{
 			// Дёргаем condition_variable только, если добавили первый элемент
 			// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
+#error "? что делать в случае исключений при блокировке мьютекса или notify_one ?"
+#error "как вариант, циклически крутиться, пока не улыбнётся удача"
 			std::lock_guard<std::mutex> lock( Mut );
 			Cv.notify_one();
 		}

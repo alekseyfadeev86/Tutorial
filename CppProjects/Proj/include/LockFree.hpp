@@ -340,9 +340,10 @@ namespace LockFree
 				}
 #endif
 			}
-
+			
 			/**
 			 * @brief InternalPop Извлечение элемента из начала списка
+			 * @param buf буфер, в который будет записан удалённый элемент
 			 * @param def_value указатель на значение по умолчанию.
 			 * Если def_value не нулевой и список пуст - будет возвращено
 			 * значение, на которое указывает def_value.
@@ -350,7 +351,7 @@ namespace LockFree
 			 * @throw std::out_of_range, если список пуст и значение
 			 * по умолчанию не задано
 			 */
-			T InternalPop( const T *def_value )
+			void InternalPop( T &buf, const T *def_value )
 			{
 				if( Top != nullptr )
 				{
@@ -358,7 +359,7 @@ namespace LockFree
 					try
 					{
 						Top = Top->Next;
-						return std::move_if_noexcept( old_top->Value );
+						buf = std::move_if_noexcept( old_top->Value );
 					}
 					catch( ... )
 					{
@@ -367,13 +368,14 @@ namespace LockFree
 						throw;
 					}
 				}
-
-				if( def_value == nullptr )
+				else if( def_value != nullptr )
+				{
+					buf = *def_value;
+				}
+				else
 				{
 					throw std::out_of_range( "List is empty!" );
 				}
-
-				return *def_value;
 			}
 
 		public:
@@ -492,7 +494,9 @@ namespace LockFree
 			 */
 			T Pop( const T &def_value )
 			{
-				return InternalPop( &def_value );
+				T res;
+				InternalPop( res, &def_value );
+				return std::move( res );
 			}
 
 			/**
@@ -502,7 +506,30 @@ namespace LockFree
 			 */
 			T Pop()
 			{
-				return InternalPop( nullptr );
+				T res;
+				InternalPop( res, nullptr );
+				return std::move( res );
+			}
+			
+			/**
+			 * @brief Pop Извлечение элемента из начала списка
+			 * @param buf буфер, в который будет записан первый элемент
+			 * списка, либо значение по умолчанию
+			 * @param def_value ссылка на значение по умолчанию
+			 */
+			void Pop( T &buf, const T &def_value )
+			{
+				InternalPop( buf, &def_value );
+			}
+
+			/**
+			 * @brief Pop Извлечение элемента из начала списка
+			 * @param buf буфер, в который будет записан первый элемент списка
+			 * @throw std::out_of_range, если список пуст
+			 */
+			void Pop( T &buf )
+			{
+				InternalPop( buf, nullptr );
 			}
 
 			/// Удаляет все элементы, удовлетворяющие условию
@@ -1239,20 +1266,22 @@ namespace LockFree
 				std::unique_ptr<ElementType> ptr( new ElementType( args... ) );
 				return internal::TryPushHead( Head, ptr );
 			}
-
+			
 			/**
 			 * @brief Pop извлечение элемента из стека
+			 * @param result переменная, в которую будет записан результат
+			 * (первый элемент стека или значение по умолчанию)
 			 * @param default_value_ptr указатель на значение по умолчанию,
 			 * которое будет возвращено, если стек пуст;
 			 * если параметр нулевой и стек пуст - будет выброшено исключение std::out_of_range
 			 * @param is_empty если параемтр ненулевой - в него будет записана информация о том,
 			 * был ли удалён последний элемент из стека (если он был непустым)
-			 * @return элемент стека
+			 * @throw std::out_of_range, если стек пуст и значение по умолчанию не задано
 			 */
-			T Pop( const T *default_value_ptr = nullptr,
-			       bool *is_empty = nullptr )
+			void Pop( T &result,
+			          const T *default_value_ptr = nullptr,
+			          bool *is_empty = nullptr )
 			{
-				T result;
 				if( is_empty != nullptr )
 				{
 					*is_empty = false;
@@ -1328,8 +1357,23 @@ namespace LockFree
 						throw std::out_of_range( "Stack is empty!" );
 					}
 				}
+			} // void Pop
 
-				return result;
+			/**
+			 * @brief Pop извлечение элемента из стека
+			 * @param default_value_ptr указатель на значение по умолчанию,
+			 * которое будет возвращено, если стек пуст;
+			 * если параметр нулевой и стек пуст - будет выброшено исключение std::out_of_range
+			 * @param is_empty если параемтр ненулевой - в него будет записана информация о том,
+			 * был ли удалён последний элемент из стека (если он был непустым)
+			 * @return элемент стека
+			 */
+			T Pop( const T *default_value_ptr = nullptr,
+			       bool *is_empty = nullptr )
+			{
+				T result;
+				Pop( result, default_value_ptr, is_empty );
+				return std::move( result );
 			} // T Pop
 			
 			/// Очистить очередь на отложенное удаление
