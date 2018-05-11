@@ -124,52 +124,55 @@ namespace Bicycle
 		return !WasCancelled.exchange( true );
 	}
 	
+	void TimeTasksQueue::SemPush()
+	{
+#ifdef _DEBUG
+		while( 1 )
+		{
+			try
+			{
+				Sem.Push();
+				break;
+			}
+			catch( ... )
+			{
+#ifndef _DEBUG
+#error "? обработать исключение ?"
+#endif
+			}
+	}
+	
 	void TimeTasksQueue::ThreadFunc()
 	{
 		// Задачи, отсортированные по времени сработки
 		std::multimap<time_point_type, task_type> tasks_map;
 		
 		elem_type task_element;
-		bool element_was_left = false;
+		
+		LockFree::ForwardList<elem_type>::Unsafe new_elements;
 
 		while( RunFlag.load() )
 		{
-			std::unique_lock<std::mutex> lock;
-			
-			// Считываем новые задачи, сортируем их по времени сработки
-			auto new_elems = Tasks.Release();
-			bool timeout_expired = false;
-			
 			try
 			{
-				if( element_was_left )
+				// Добавляем оставшиеся элементы, которые были извлечены из
+				// Tasks, но не добавлены в tasks_map
+				if( task_element.second )
 				{
 					tasks_map.insert( task_element );
-					element_was_left = false;
+					task_element.second.reset();
 				}
 				
-				while( new_elems )
+				while( new_elements )
 				{
-					MY_ASSERT( !element_was_left );
-					new_elems.Pop( task_element );
-					element_was_left = true;
+					MY_ASSERT( !task_element.second );
+					new_elements.Pop( task_element );
+					
+					MY_ASSERT( task_element.second );
 					tasks_map.insert( task_element );
-					element_was_left = false;
+					task_element.second.reset();
 				}
-				MY_ASSERT( !new_elems );
-				
-				lock = std::unique_lock<std::mutex>( Mut );
-				MY_ASSERT( lock );
-				if( !RunFlag.load() )
-				{
-					// Завершаем работу
-					break;
-				}
-				else if( Tasks )
-				{
-					// Появились новые задачи
-					continue;
-				}
+				MY_ASSERT( !new_elements );
 				
 				// Удаляем отменённые задачи
 				if( !tasks_map.empty() )
@@ -188,25 +191,38 @@ namespace Bicycle
 					tasks_map.erase( begin, remove_iter );
 				}
 				
+				bool timeout_expired = false;
 				if( tasks_map.empty() )
 				{		
-					Cv.wait( lock );
+					// Текущих задач нет - ждём новых
+					Sem.Pop();
 				}
 				else
 				{
-					const auto &tp = tasks_map.begin()->first;
-					timeout_expired = Cv.wait_until( lock, tp ) == std::cv_status::timeout;
+					// Есть текущие задачи - ждём времени выполнения первой из них,
+					// либо поступления новых
+					timeout_expired = Sem.TryPopUntil( tasks_map.begin()->first );
 				}
-				lock.unlock();
-
-				if( timeout_expired )
+				
+				if( !RunFlag.load() )
+				{
+					// Завершаем работу очереди
+					break;
+				}
+				else if( !timeout_expired )
+				{
+					// Поступили новые задачи
+					MY_ASSERT( !new_elements );
+					new_elements = Tasks.Release();
+					continue;
+				}
+				else
 				{
 					// Сработка таймера
 					// Определяем текущее время и диапазон обрабатываемых элементов
 					// (время у которых не позже текущего)
-					const auto tp = clock_type::now();
 					const auto begin = tasks_map.begin();
-					const auto end = tasks_map.upper_bound( tp );
+					const auto end = tasks_map.upper_bound( clock_type::now() );
 	
 					for( auto iter = begin; iter != end; ++iter )
 					{
@@ -225,8 +241,8 @@ namespace Bicycle
 				
 					// Удаляем обработанные элементы
 					tasks_map.erase( begin, end );
-				} // if( timeout_expired )
-			}
+				}
+			} // try
 #ifdef _DEBUG
 			catch( const std::exception& )
 #else
@@ -234,10 +250,7 @@ namespace Bicycle
 #error "? ограничить макс. число перехватываемых исключений подряд (например, 2 исключения подряд перехватили, а 3е - нет) ?"
 			catch( const std::bad_alloc& )
 #endif
-			{
-				Tasks.Push( std::move( new_elems ) );
-				continue;
-			}
+			{}
 		} // while( RunFlag.load() )
 	} // void TimeTasksQueue::ThreadFunc()
 
@@ -257,14 +270,11 @@ namespace Bicycle
 
 		if( Tasks.Emplace( tp, task ) )
 		{
-			// Дёргаем condition_variable только, если добавили первый элемент
+			// Накручиваем счётчик семафора только, если добавили первый элемент
 			// (иначе кто-то другой уже дёрнул её, но поток пока не обработал)
-#error "? что делать в случае исключений при блокировке мьютекса или notify_one ?"
-#error "как вариант, циклически крутиться, пока не улыбнётся удача"
-			std::lock_guard<std::mutex> lock( Mut );
-			Cv.notify_one();
-		}
-	}
+			SemPush();
+		} // if( Tasks.Emplace( tp, task ) )
+	} // void TimeTasksQueue::PostAt
 	
 	std::shared_ptr<TimeTasksQueue> TimeTasksQueue::GetQueue()
 	{
@@ -286,10 +296,7 @@ namespace Bicycle
 	TimeTasksQueue::~TimeTasksQueue()
 	{
 		RunFlag.store( false );
-		{
-			std::lock_guard<std::mutex> lock( Mut );
-			Cv.notify_all();
-		}
+		SemPush();
 		WorkThread.join();
 	}
 	
