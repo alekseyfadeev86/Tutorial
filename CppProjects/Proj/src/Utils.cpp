@@ -128,6 +128,9 @@ namespace Bicycle
 	{
 		// Задачи, отсортированные по времени сработки
 		std::multimap<time_point_type, task_type> tasks_map;
+		
+		elem_type task_element;
+		bool element_was_left = false;
 
 		while( RunFlag.load() )
 		{
@@ -136,9 +139,6 @@ namespace Bicycle
 			// Считываем новые задачи, сортируем их по времени сработки
 			auto new_elems = Tasks.Release();
 			bool timeout_expired = false;
-			
-			elem_type task_element;
-			bool element_was_left = false;
 			
 			try
 			{
